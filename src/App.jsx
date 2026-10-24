@@ -299,11 +299,11 @@ const App = () => {
 
   useEffect(() => {
     if (!user) return;
-    const employeesRef = collection(db, 'artifacts', appId, 'public', 'data', 'employees');
-    const logsRef = collection(db, 'artifacts', appId, 'public', 'data', 'logs');
-    const customersRef = collection(db, 'artifacts', appId, 'public', 'data', 'customers');
-    const attRef = collection(db, 'artifacts', appId, 'public', 'data', 'attendance');
-    const leaveRef = collection(db, 'artifacts', appId, 'public', 'data', 'leaves');
+    const employeesRef = collection(db, 'artifacts', appId, 'employees');
+    const logsRef = collection(db, 'artifacts', appId, 'logs');
+    const customersRef = collection(db, 'artifacts', appId, 'customers');
+    const attRef = collection(db, 'artifacts', appId, 'attendance');
+    const leaveRef = collection(db, 'artifacts', appId, 'leaves');
     let loadedCount = 0;
     const checkLoaded = () => { loadedCount++; if (loadedCount >= 3) setIsDataLoaded(true); };
     
