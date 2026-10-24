@@ -31,13 +31,6 @@ import {
   Timer, LogIn, LogOut, CalendarOff, CheckSquare, XSquare
 } from 'lucide-react';
 
-console.log("測試讀取金鑰：", import.meta.env.VITE_FIREBASE_API_KEY); // 👉 加上這行測試
-
-const firebaseConfig = {
-  apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
-  // ... 其他設定
-};
-// 讓 Firebase 讀取我們寫在 .env 裡的變數
 const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
   authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
