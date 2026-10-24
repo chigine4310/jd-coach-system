@@ -1246,9 +1246,9 @@ const App = () => {
     triggerSync(async () => { await addDoc(collection(db, 'artifacts', appId, 'employees'), { ...newEmp, createdAt: new Date().toISOString() }); setNewEmp({ name: '', xValue: '', type: 'formalA', isBossNoPay: false, baseSalary: '', startDate: getLocalDateString(), projectTitle: '', promotionDate: '', prePromotionType: '' }); });
   };
 
-  const triggerDeleteLog = (log) => { setConfirmModal({ isOpen: true, type: 'danger', title: '刪除紀錄', message: '確定刪除這筆營運紀錄？', action: async () => triggerSync(async () => await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'logs', log.id))) }); };
-  const triggerDeleteEmployee = (emp) => { setConfirmModal({ isOpen: true, type: 'danger', title: '刪除教練', message: `確定永久刪除教練？`, action: async () => triggerSync(async () => await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'employees', emp.id))) }); };
-  const triggerDeleteCustomer = (cust) => { setConfirmModal({ isOpen: true, type: 'danger', title: '刪除學員', message: `確定永久刪除學員？`, action: async () => triggerSync(async () => await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'customers', cust.id))) }); };
+  const triggerDeleteLog = (log) => { setConfirmModal({ isOpen: true, type: 'danger', title: '刪除紀錄', message: '確定刪除這筆營運紀錄？', action: async () => triggerSync(async () => await deleteDoc(doc(db, 'artifacts', appId, 'logs', log.id))) }); };
+  const triggerDeleteEmployee = (emp) => { setConfirmModal({ isOpen: true, type: 'danger', title: '刪除教練', message: `確定永久刪除教練？`, action: async () => triggerSync(async () => await deleteDoc(doc(db, 'artifacts', appId, 'employees', emp.id))) }); };
+  const triggerDeleteCustomer = (cust) => { setConfirmModal({ isOpen: true, type: 'danger', title: '刪除學員', message: `確定永久刪除學員？`, action: async () => triggerSync(async () => await deleteDoc(doc(db, 'artifacts', appId, 'customers', cust.id))) }); };
 
   const handleLogout = () => { 
     setConfirmModal({ 
