@@ -1569,21 +1569,22 @@ const App = () => {
     return { earned, used, available: Math.max(0, earned - used) };
   }, [attendanceRecords, leaveRecords, loggedInCoachId, leaveData.date]);
 
-  const handleClockIn = async () => {
-    if (!loggedInCoachId) return;
-    const now = new Date();
-    const timeString = now.toTimeString().slice(0, 5);
-    triggerSync(async () => {
-      await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'attendance'), {
-        employeeId: loggedInCoachId,
-        date: getLocalDateString(),
-        clockInTime: timeString,
-        clockOutTime: null,
-        workMinutes: 0,
-        createdAt: now.toISOString()
-      });
+const handleClockIn = async () => {
+  if (!loggedInCoachId) return;
+  const now = new Date();
+  const timeString = now.toTimeString().slice(0, 5);
+  triggerSync(async () => {
+    // ✅ 確保這裡的路徑是 artifacts -> appId -> attendance
+    await addDoc(collection(db, 'artifacts', appId, 'attendance'), {
+      employeeId: loggedInCoachId,
+      date: getLocalDateString(),
+      clockInTime: timeString,
+      clockOutTime: null,
+      workMinutes: 0,
+      createdAt: now.toISOString()
     });
-  };
+  });
+};
 
   const handleClockOut = async (recordId, clockInTime) => {
     const now = new Date();
