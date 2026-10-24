@@ -30,6 +30,7 @@ import {
   FileJson, DollarSign, Save, X, Cloud, CheckCircle2,
   Timer, LogIn, LogOut, CalendarOff, CheckSquare, XSquare
 } from 'lucide-react';
+// ✅ 這是正確的寫法 (對應您 .env 裡的大寫變數名稱)
 const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
   authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
