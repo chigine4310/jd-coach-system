@@ -1174,7 +1174,7 @@ const App = () => {
         dataToSave.baseSalary = Number(dataToSave.baseSalary);
       }
 
-      await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'employees', editingEmployee.id), { 
+      await updateDoc(doc(db, 'artifacts', appId, 'employees', editingEmployee.id), { 
         ...dataToSave, 
         updatedAt: new Date().toISOString() 
       }); 
@@ -1240,9 +1240,9 @@ const App = () => {
     triggerSync(async () => { await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'employees'), { ...newEmp, createdAt: new Date().toISOString() }); setNewEmp({ name: '', xValue: '', type: 'formalA', isBossNoPay: false, baseSalary: '', startDate: getLocalDateString(), projectTitle: '', promotionDate: '', prePromotionType: '' }); });
   };
 
-  const triggerDeleteLog = (log) => { setConfirmModal({ isOpen: true, type: 'danger', title: '刪除紀錄', message: '確定刪除這筆營運紀錄？', action: async () => triggerSync(async () => await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'logs', log.id))) }); };
-  const triggerDeleteEmployee = (emp) => { setConfirmModal({ isOpen: true, type: 'danger', title: '刪除教練', message: `確定永久刪除教練？`, action: async () => triggerSync(async () => await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'employees', emp.id))) }); };
-  const triggerDeleteCustomer = (cust) => { setConfirmModal({ isOpen: true, type: 'danger', title: '刪除學員', message: `確定永久刪除學員？`, action: async () => triggerSync(async () => await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'customers', cust.id))) }); };
+  const triggerDeleteLog = (log) => { setConfirmModal({ isOpen: true, type: 'danger', title: '刪除紀錄', message: '確定刪除這筆營運紀錄？', action: async () => triggerSync(async () => await deleteDoc(doc(db, 'artifacts', appId, 'logs', log.id))) }); };
+  const triggerDeleteEmployee = (emp) => { setConfirmModal({ isOpen: true, type: 'danger', title: '刪除教練', message: `確定永久刪除教練？`, action: async () => triggerSync(async () => await deleteDoc(doc(db, 'artifacts', appId, 'employees', emp.id))) }); };
+  const triggerDeleteCustomer = (cust) => { setConfirmModal({ isOpen: true, type: 'danger', title: '刪除學員', message: `確定永久刪除學員？`, action: async () => triggerSync(async () => await deleteDoc(doc(db, 'artifacts', appId, 'customers', cust.id))) }); };
 
   const handleLogout = () => { 
     setConfirmModal({ 
@@ -1478,9 +1478,9 @@ const App = () => {
           const reader = new FileReader();
           reader.onload = async (event) => {
             const data = JSON.parse(event.target.result);
-            if (data.employees) for (const item of data.employees) await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'employees', item.id), item);
-            if (data.customers) for (const item of data.customers) await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'customers', item.id), item);
-            if (data.logs) for (const item of data.logs) await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'logs', item.id), item);
+            if (data.employees) for (const item of data.employees) await setDoc(doc(db, 'artifacts', appId, 'employees', item.id), item);
+            if (data.customers) for (const item of data.customers) await setDoc(doc(db, 'artifacts', appId, 'customers', item.id), item);
+            if (data.logs) for (const item of data.logs) await setDoc(doc(db, 'artifacts', appId, 'logs', item.id), item);
             setSyncStatus('success');
             setTimeout(() => setSyncStatus('idle'), 2000);
             alert('資料庫遷移成功！');
