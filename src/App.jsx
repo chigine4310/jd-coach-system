@@ -298,15 +298,22 @@ const App = () => {
 
   useEffect(() => {
     if (!user) return;
-    const employeesRef = collection(db, 'artifacts', appId, 'public', 'data', 'employees');
-    const logsRef = collection(db, 'artifacts', appId, 'public', 'data', 'logs');
-    const customersRef = collection(db, 'artifacts', appId, 'public', 'data', 'customers');
-    const attRef = collection(db, 'artifacts', appId, 'public', 'data', 'attendance');
-    const leaveRef = collection(db, 'artifacts', appId, 'public', 'data', 'leaves');
+    const employeesRef = collection(db, 'artifacts', appId, 'employees');
+    const logsRef = collection(db, 'artifacts', appId, 'logs');
+    const customersRef = collection(db, 'artifacts', appId, 'customers');
+    const attRef = collection(db, 'artifacts', appId, 'attendance');
+    const leaveRef = collection(db, 'artifacts', appId, 'leaves');
     let loadedCount = 0;
     const checkLoaded = () => { loadedCount++; if (loadedCount >= 3) setIsDataLoaded(true); };
     
-    const unsubEmp = onSnapshot(employeesRef, (s) => { setEmployees(s.docs.map(d => ({ id: d.id, ...d.data() }))); checkLoaded(); }, (err) => console.error(err));
+    const unsubEmp = onSnapshot(employeesRef, (s) => {
+  const empList = s.docs.map(d => ({ id: d.id, ...d.data() }));
+  console.log("🔥 成功抓到員工/教練資料：", empList); // 👈 幫我們印出結果
+  setEmployees(empList); 
+  checkLoaded(); 
+}, (err) => {
+  console.error("❌ 抓取員工資料失敗 (權限或路徑錯誤)：", err); // 👈 如果失敗會印出詳細原因
+});
     const unsubLog = onSnapshot(logsRef, (s) => { setDailyLogs(s.docs.map(d => ({ id: d.id, ...d.data() }))); checkLoaded(); }, (err) => console.error(err));
     const unsubCust = onSnapshot(customersRef, (s) => { setCustomers(s.docs.map(d => ({ id: d.id, ...d.data() }))); checkLoaded(); }, (err) => console.error(err));
     const unsubAtt = onSnapshot(attRef, (s) => { setAttendanceRecords(s.docs.map(d => ({ id: d.id, ...d.data() }))); }, (err) => console.error(err));
@@ -1069,7 +1076,7 @@ const App = () => {
         });
       }
 
-      await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'logs'), { 
+      await addDoc(collection(db, 'artifacts', appId, 'logs'), { 
         ...logData, 
         customerName: finalCustomerName,
         classDuration: logData.classDuration || '90min',
@@ -1210,7 +1217,7 @@ const App = () => {
     
     const doAdd = () => {
       triggerSync(async () => {
-        await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'customers'), { 
+        await addDoc(collection(db, 'artifacts', appId,  'customers'), { 
            ...newCust, 
            customerType: 'person', 
            remaining: Number(newCust.remaining) || 0, 
@@ -1236,7 +1243,7 @@ const App = () => {
   const handleAddEmployee = async (e) => {
     e.preventDefault();
     if (!newEmp.name?.trim()) return;
-    triggerSync(async () => { await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'employees'), { ...newEmp, createdAt: new Date().toISOString() }); setNewEmp({ name: '', xValue: '', type: 'formalA', isBossNoPay: false, baseSalary: '', startDate: getLocalDateString(), projectTitle: '', promotionDate: '', prePromotionType: '' }); });
+    triggerSync(async () => { await addDoc(collection(db, 'artifacts', appId, 'employees'), { ...newEmp, createdAt: new Date().toISOString() }); setNewEmp({ name: '', xValue: '', type: 'formalA', isBossNoPay: false, baseSalary: '', startDate: getLocalDateString(), projectTitle: '', promotionDate: '', prePromotionType: '' }); });
   };
 
   const triggerDeleteLog = (log) => { setConfirmModal({ isOpen: true, type: 'danger', title: '刪除紀錄', message: '確定刪除這筆營運紀錄？', action: async () => triggerSync(async () => await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'logs', log.id))) }); };
@@ -1573,7 +1580,7 @@ const App = () => {
     const now = new Date();
     const timeString = now.toTimeString().slice(0, 5);
     triggerSync(async () => {
-      await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'attendance'), {
+      await addDoc(collection(db, 'artifacts', appId, 'attendance'), {
         employeeId: loggedInCoachId,
         date: getLocalDateString(),
         clockInTime: timeString,
@@ -1621,7 +1628,7 @@ const App = () => {
     }
 
     triggerSync(async () => {
-      await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'leaves'), {
+      await addDoc(collection(db, 'artifacts', appId, 'leaves'), {
         employeeId: loggedInCoachId,
         date: leaveData.date,
         type: leaveData.type,
