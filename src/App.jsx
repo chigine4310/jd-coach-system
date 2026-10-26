@@ -32,15 +32,7 @@ import {
   ChevronLeft, ChevronRight, CalendarCheck
 } from 'lucide-react';
 
-const firebaseConfig = {
-  apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
-  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
-  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
-  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
-  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
-  appId: import.meta.env.VITE_FIREBASE_APP_ID,
-  measurementId: import.meta.env.VITE_FIREBASE_MEASUREMENT_ID
-};
+const firebaseConfig = JSON.parse(__firebase_config);
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
@@ -172,6 +164,8 @@ const App = () => {
   const [attendanceRecords, setAttendanceRecords] = useState([]);
   const [leaveRecords, setLeaveRecords] = useState([]);
   const [expenses, setExpenses] = useState([]);
+  const [monthlyAdjustments, setMonthlyAdjustments] = useState([]);
+  const [inventoryData, setInventoryData] = useState([]);
   const [activeTab, setActiveTab] = useState('attendance');
   const [athleteMode, setAthleteMode] = useState('deduct'); 
   const [dailyOpMode, setDailyOpMode] = useState('deduct'); 
@@ -192,8 +186,10 @@ const App = () => {
   const [editingLog, setEditingLog] = useState(null);
   const [editingCustomer, setEditingCustomer] = useState(null);
   const [editingEmployee, setEditingEmployee] = useState(null);
+  const [editingSalaryAdj, setEditingSalaryAdj] = useState(null);
   const [confirmModal, setConfirmModal] = useState({ isOpen: false, type: 'danger', title: '', message: '', action: null });
   const [aiModal, setAiModal] = useState({ isOpen: false, title: '', content: '', isLoading: false });
+  const [showPayslipModal, setShowPayslipModal] = useState(false);
   const [selectedCoachForDetails, setSelectedCoachForDetails] = useState(null);
   const [selectedCustomerForDetails, setSelectedCustomerForDetails] = useState(null);
   
@@ -218,7 +214,7 @@ const App = () => {
     sales10: '0', sales5: '0', salesAthlete: '0', purchaseDate: getLocalDateString(),
     paymentMethod: '現金', isAthleteProject: false,
     productName: '', productPrice: '', productQty: '1', eventSupportPay: '0',
-    specialEventType: '' 
+    specialEventType: '', transportDistance: '', transportFee: '0'
   });
 
   const [activeFinanceTab, setActiveFinanceTab] = useState('overview');
@@ -333,6 +329,9 @@ const App = () => {
     const attRef = collection(db, 'artifacts', appId, 'public', 'data', 'attendance');
     const leaveRef = collection(db, 'artifacts', appId, 'public', 'data', 'leaves');
     const expRef = collection(db, 'artifacts', appId, 'public', 'data', 'expenses');
+    const adjRef = collection(db, 'artifacts', appId, 'public', 'data', 'salary_adjustments');
+    const invRef = collection(db, 'artifacts', appId, 'public', 'data', 'inventory');
+    
     let loadedCount = 0;
     const checkLoaded = () => { loadedCount++; if (loadedCount >= 3) setIsDataLoaded(true); };
     
@@ -342,8 +341,10 @@ const App = () => {
     const unsubAtt = onSnapshot(attRef, (s) => { setAttendanceRecords(s.docs.map(d => ({ id: d.id, ...d.data() }))); }, (err) => console.error(err));
     const unsubLeave = onSnapshot(leaveRef, (s) => { setLeaveRecords(s.docs.map(d => ({ id: d.id, ...d.data() }))); }, (err) => console.error(err));
     const unsubExp = onSnapshot(expRef, (s) => { setExpenses(s.docs.map(d => ({ id: d.id, ...d.data() }))); }, (err) => console.error(err));
+    const unsubAdj = onSnapshot(adjRef, (s) => { setMonthlyAdjustments(s.docs.map(d => ({ id: d.id, ...d.data() }))); }, (err) => console.error(err));
+    const unsubInv = onSnapshot(invRef, (s) => { setInventoryData(s.docs.map(d => ({ id: d.id, ...d.data() }))); }, (err) => console.error(err));
     
-    return () => { unsubEmp(); unsubLog(); unsubCust(); unsubAtt(); unsubLeave(); unsubExp(); };
+    return () => { unsubEmp(); unsubLog(); unsubCust(); unsubAtt(); unsubLeave(); unsubExp(); unsubAdj(); unsubInv(); };
   }, [user]);
 
   useEffect(() => {
@@ -424,12 +425,14 @@ const App = () => {
         }
         seniorityYears = Math.max(0, seniorityYears);
     }
-    const discount = seniorityYears; // 每年年資折抵一堂
+    const discount = Math.min(15, seniorityYears); // 每年年資折抵一堂 (加入防呆上限15，避免異常日期導致門檻歸零)
 
     if (log.specialEventType === '隨喜40min') {
       classPay = Number(log.companyRevenue) || 0; 
     } else if (log.specialEventType === '進階體驗90min') {
       classPay = 500;
+    } else if (log.specialEventType?.startsWith('出差任務')) {
+      classPay = 0; // 修正：出差任務不計算常規課堂抽成，僅以「活動薪資」與「車馬費」發放
     } else if (log.classDuration === 'athlete_buy') {
       classPay = 0;
     } else {
@@ -496,8 +499,9 @@ const App = () => {
     const bonus = (Number(log.sales10) || 0) * 750 + (Number(log.sales5) || 0) * 345 + productBonus;
     const refAdj = Math.round(eligibleRef * 100);
     const eventSupportPay = Number(log.eventSupportPay) || 0;
+    const transportFee = Number(log.transportFee) || 0;
     
-    return { classPay: Math.round(classPay), bonus, refAdj, eventSupportPay, total: Math.round(classPay + bonus + refAdj + eventSupportPay), validClasses };
+    return { classPay: Math.round(classPay), bonus, refAdj, eventSupportPay, transportFee, total: Math.round(classPay + bonus + refAdj + eventSupportPay + transportFee), validClasses };
   };
 
   const calculateSettlement = (empId, month) => {
@@ -505,14 +509,15 @@ const App = () => {
     if (!emp) return null;
     const mLogs = dailyLogs.filter(l => l.date && l.date.startsWith(month)).sort((a, b) => a.date.localeCompare(b.date) || (a.createdAt || '').localeCompare(b.createdAt || ''));
     const empLogs = mLogs.filter(l => l.employeeId === empId);
-    let totalClasses = 0, totalClassPay = 0, totalBonus = 0, totalRef = 0, totalEventSupport = 0, cumulative = 0;
+    let totalClasses = 0, totalClassPay = 0, totalBonus = 0, totalRef = 0, totalEventSupport = 0, totalTransportFee = 0, cumulative = 0;
     
     empLogs.forEach(log => {
-      const b = calculateEntrySalary(emp, log, cumulative, 0); // 自己上課不帶入轉介
+      const b = calculateEntrySalary(emp, log, cumulative, 0); 
       totalClasses += b.validClasses; 
       totalClassPay += b.classPay;
       totalBonus += b.bonus;
       totalEventSupport += b.eventSupportPay;
+      totalTransportFee += b.transportFee;
       cumulative += b.validClasses;
     });
     
@@ -537,11 +542,23 @@ const App = () => {
     });
     const finalBaseSalary = Math.max(0, Math.round(baseSalary - leaveDeduction));
     
-    const grossSalary = Math.round(finalBaseSalary + totalClassPay + totalBonus + totalRef + totalEventSupport);
+    const customAdj = monthlyAdjustments.find(a => a.id === `${empId}_${month}`) || {};
+    const professionalAllowance = Number(customAdj.professionalAllowance) || 0;
+    const projectBonus = Number(customAdj.projectBonus) || 0;
+    const managerAllowance = Number(customAdj.managerAllowance) || 0;
+    const otherAllowance = Number(customAdj.otherAllowance) || 0;
+
+    const grossSalary = Math.round(finalBaseSalary + totalClassPay + totalBonus + totalRef + totalEventSupport + totalTransportFee + professionalAllowance + projectBonus + managerAllowance + otherAllowance);
     
     let typeLabel = getCoachTypeLabel(emp.type);
     
-    return { totalClasses, grossSalary, totalRef, totalBonus, totalEventSupport, typeLabel, baseSalary: finalBaseSalary, originalBaseSalary: baseSalary, leaveDeduction: Math.round(leaveDeduction) };
+    return { 
+       totalClasses, grossSalary, totalRef, totalBonus, totalEventSupport, totalTransportFee, 
+       typeLabel, baseSalary: finalBaseSalary, originalBaseSalary: baseSalary, leaveDeduction: Math.round(leaveDeduction),
+       professionalAllowance, projectBonus, managerAllowance, otherAllowance,
+       supplementaryHealthIns: Number(customAdj.supplementaryHealthIns) || 0,
+       otherDeduction: Number(customAdj.otherDeduction) || 0
+    };
   };
 
   const financeDashboard = useMemo(() => {
@@ -723,6 +740,7 @@ const App = () => {
         referralBonus: 0,
         referralClassesGenerated: 0,
         eventSupportPay: 0,
+        transportFee: 0,
         classIncome: 0,
         customers: new Set()
       };
@@ -794,6 +812,7 @@ const App = () => {
       const sourceId = log.referralSourceId;
       const receiverId = log.referralReceiverId;
       const eventSupportPay = Number(log.eventSupportPay) || 0;
+      const transportFee = Number(log.transportFee) || 0;
       
       let classCashRev = 0;
       if (log.specialEventType === '隨喜40min') {
@@ -843,6 +862,7 @@ const App = () => {
         coachStats[teacherId].totalSales10 += s10Qty;
         coachStats[teacherId].salesBonus += currentSalesBonus;
         coachStats[teacherId].eventSupportPay += eventSupportPay;
+        coachStats[teacherId].transportFee += transportFee;
         coachStats[teacherId].classIncome += (logPayMap[log.id] || 0); 
         coachStats[teacherId].customers.add(log.customerName);
       }
@@ -903,6 +923,16 @@ const App = () => {
       const salesBonus = coach.salesBonus || 0;
       const refBonus = coach.referralBonus || 0;
       const eventSupportPay = coach.eventSupportPay || 0;
+      const transportFee = coach.transportFee || 0;
+
+      const focusMonth = filterEndDate ? filterEndDate.slice(0, 7) : getLocalMonthString();
+      const customAdj = monthlyAdjustments.find(a => a.id === `${coach.id}_${focusMonth}`) || {};
+      const professionalAllowance = Number(customAdj.professionalAllowance) || 0;
+      const projectBonus = Number(customAdj.projectBonus) || 0;
+      const managerAllowance = Number(customAdj.managerAllowance) || 0;
+      const otherAllowance = Number(customAdj.otherAllowance) || 0;
+      const suppHealth = Number(customAdj.supplementaryHealthIns) || 0;
+      const otherDed = Number(customAdj.otherDeduction) || 0;
       
       let defaultBase = isBoss ? 0 : (coach.baseSalary !== undefined && coach.baseSalary !== '' ? Number(coach.baseSalary) : getBaseSalaryDefaults(coach.type));
       let baseSalary = (customBaseSalaries[coach.id] !== undefined ? customBaseSalaries[coach.id] : defaultBase) * monthDiff;
@@ -918,7 +948,7 @@ const App = () => {
       baseSalary = Math.max(0, Math.round(baseSalary - leaveDeduction));
 
       let classIncome = coach.classIncome || 0;
-      let grossPay = Math.round(baseSalary + classIncome + salesBonus + refBonus + eventSupportPay);
+      let grossPay = Math.round(baseSalary + classIncome + salesBonus + refBonus + eventSupportPay + transportFee + professionalAllowance + projectBonus + managerAllowance + otherAllowance);
       const isCompany = customIsCompany[coach.id] || false;
 
       let laborInsEmp = 0, healthInsEmp = 0, tax = 0, invoiceVat = 0;
@@ -948,7 +978,7 @@ const App = () => {
           tax = Math.round(grossPay * CONFIG.taxRate);
         }
         
-        netPay = grossPay - laborInsEmp - healthInsEmp - tax;
+        netPay = grossPay - laborInsEmp - healthInsEmp - tax - suppHealth - otherDed;
         totalCorpCost = grossPay + laborInsCorp + healthInsCorp + pensionCorp;
       }
 
@@ -956,8 +986,10 @@ const App = () => {
 
       return {
         ...coach,
-        baseSalary, classIncome, salesBonus, refBonus, eventSupportPay, grossPay,
-        laborInsEmp, healthInsEmp, tax, invoiceVat, isCompany, netPay,
+        baseSalary, classIncome, salesBonus, refBonus, eventSupportPay, transportFee,
+        professionalAllowance, projectBonus, managerAllowance, otherAllowance,
+        suppHealth, otherDed,
+        grossPay, laborInsEmp, healthInsEmp, tax, invoiceVat, isCompany, netPay,
         laborInsCorp, healthInsCorp, pensionCorp, totalCorpCost
       };
     }).sort((a, b) => b.netPay - a.netPay);
@@ -1137,6 +1169,8 @@ const App = () => {
         classes: clsCount, 
         companyRevenue: companyRevenueVal,
         eventSupportPay: Number(logData.eventSupportPay) || 0,
+        transportFee: Number(logData.transportFee) || 0,
+        transportDistance: logData.transportDistance || '',
         salesAthlete: String(sAth),
         createdAt: new Date().toISOString()
       });
@@ -1150,7 +1184,7 @@ const App = () => {
         paymentMethod: activeTab === 'athlete' && athleteMode === 'buy' ? '現金' : (activeTab === 'athlete' ? '代扣' : '現金'), 
         isAthleteProject: activeTab === 'athlete', 
         productName: '', productPrice: '', productQty: '1', eventSupportPay: '0',
-        specialEventType: activeTab === 'special' ? '隨喜40min' : ''
+        specialEventType: activeTab === 'special' ? '隨喜40min' : '', transportDistance: '', transportFee: '0'
       });
     });
   };
@@ -1310,11 +1344,11 @@ const App = () => {
   };
 
   const handleExportSummary = () => {
-    const headers = ['教練姓名', '類型', '月總堂數', '銷售獎勵總額', '轉介獎勵總額', '活動支援總額', '估計實領總額'];
+    const headers = ['教練姓名', '類型', '月總堂數', '銷售獎勵總額', '活動支援總額', '估計實領總額'];
     const rows = employees.map(emp => {
       const p = calculateSettlement(emp.id, summaryMonth);
       if (!p) return null;
-      return [emp.name, p.typeLabel, p.totalClasses, p.totalBonus, p.totalRef, p.totalEventSupport, p.grossSalary];
+      return [emp.name, p.typeLabel, p.totalClasses, p.totalBonus, p.totalEventSupport, p.grossSalary];
     }).filter(row => row !== null);
     const csvContent = "\uFEFF" + [headers, ...rows].map(e => e.join(",")).join("\n");
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
@@ -1335,14 +1369,13 @@ const App = () => {
     csvContent += `員工姓名,${coachName}\n`;
     csvContent += `職務類型,${detailSettlement.typeLabel}\n\n`;
 
-    const commission = detailSettlement.grossSalary - detailSettlement.baseSalary - detailSettlement.totalBonus - detailSettlement.totalRef - detailSettlement.totalEventSupport;
+    const commission = detailSettlement.grossSalary - detailSettlement.baseSalary - detailSettlement.totalBonus - detailSettlement.totalEventSupport;
 
     csvContent += `一、應發金額明細（工資各項目給付明細）\n`;
     csvContent += `1. 本薪/底薪 (勞雇議定固定薪資),$${detailSettlement.baseSalary || 0}\n`;
     csvContent += `2. 業績抽成 (本月累計 ${formatClasses(detailSettlement.totalClasses)} 堂),$${commission}\n`;
     csvContent += `3. 銷售推廣獎金,$${detailSettlement.totalBonus}\n`;
-    csvContent += `4. 轉介開發獎金,$${detailSettlement.totalRef}\n`;
-    csvContent += `5. 其他不固定薪資/津貼 (活動出差等),$${detailSettlement.totalEventSupport}\n`;
+    csvContent += `4. 其他不固定薪資/津貼 (活動出差等),$${detailSettlement.totalEventSupport}\n`;
     csvContent += `【應發工資總額】,$${detailSettlement.grossSalary}\n\n`;
 
     if (selectedCoachForDetails.type?.startsWith('formal')) {
@@ -1388,7 +1421,7 @@ const App = () => {
     }
 
     csvContent += `※ 以下為本月提供勞務(授課/推廣)之明細備查：\n`;
-    csvContent += "明細序號,發生日期,學員姓名/對象,課程名稱/專案項目,扣除點數/堂數,課費抽成,銷售推廣獎金,轉介與活動津貼,單筆小計\n";
+    csvContent += "明細序號,發生日期,學員姓名/對象,課程名稱/專案項目,扣除點數/堂數,課費抽成,銷售推廣獎金,活動津貼,單筆小計\n";
 
     coachLogsForModal.forEach((row) => {
       const date = row.date || '';
@@ -1425,7 +1458,7 @@ const App = () => {
 
       const classPay = row.calc.classPay;
       const bonus = row.calc.bonus;
-      const refAdjEvent = row.calc.refAdj + row.calc.eventSupportPay;
+      const refAdjEvent = row.calc.eventSupportPay;
       const total = row.calc.total;
 
       const escapeCSV = (str) => `"${String(str).replace(/"/g, '""')}"`;
@@ -1478,10 +1511,10 @@ const App = () => {
     let rows = [];
 
     if (activeFinanceTab === 'payroll') {
-      headers = ["員工姓名", "型態", "是否公司戶開發票", "自訂底薪", "課費抽成總計", "賣課獎金", "轉介獎勵", "活動支援", "應發薪資(Gross)", "代扣稅或發票稅", "勞保(自付)", "健保(自付)", "實發薪資(Net)", "勞保(公司負擔)", "健保(公司負擔)", "勞退(公司負擔)", "公司總負擔"];
+      headers = ["員工姓名", "型態", "是否公司戶開發票", "自訂底薪", "課費抽成總計", "賣課獎金", "活動支援", "應發薪資(Gross)", "代扣稅或發票稅", "勞保(自付)", "健保(自付)", "實發薪資(Net)", "勞保(公司負擔)", "健保(公司負擔)", "勞退(公司負擔)", "公司總負擔"];
       rows = analyzedData.payroll.map(c => [
         `"${c.name}"`, getCoachTypeLabel(c.type), c.isCompany ? '是' : '否',
-        c.baseSalary, c.classIncome, c.salesBonus, c.refBonus, c.eventSupportPay, c.grossPay,
+        c.baseSalary, c.classIncome, c.salesBonus, c.eventSupportPay, c.grossPay,
         c.isCompany ? c.invoiceVat : c.tax, c.laborInsEmp, c.healthInsEmp, c.netPay,
         c.laborInsCorp, c.healthInsCorp, c.pensionCorp, c.totalCorpCost
       ]);
@@ -1582,6 +1615,23 @@ const App = () => {
     handleAICall(prompt, `💬 給 ${cus.name} 的 AI 關懷訊息`);
   };
 
+  const inventoryStats = useMemo(() => {
+    return ['花生球', '綠色迷你滾筒', '木色迷你滾筒', '黑色迷你滾筒'].map(product => {
+       const soldCount = dailyLogs.reduce((sum, log) => log.productName === product ? sum + (Number(log.productQty) || 0) : sum, 0);
+       const invRecord = inventoryData.find(i => i.id === product) || { stockIn: 0 };
+       return { product, sold: soldCount, stockIn: invRecord.stockIn, remaining: invRecord.stockIn - soldCount };
+    });
+  }, [dailyLogs, inventoryData]);
+
+  const handleUpdateInventory = async (product, newStockIn) => {
+    triggerSync(async () => {
+      await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'inventory', product), {
+         stockIn: Number(newStockIn) || 0,
+         updatedAt: new Date().toISOString()
+      });
+    });
+  };
+
   const compHoursInfo = useMemo(() => {
     if (!loggedInCoachId || !leaveData.date) return { earned: 0, used: 0, available: 0 };
     // 取得當前請假月份 (限當月結算，不跨月)
@@ -1597,9 +1647,13 @@ const App = () => {
     
     let earnedMins = 0;
     Object.values(dailyWorkMins).forEach(mins => {
-      if (mins > 480) earnedMins += (mins - 480);
+      if (mins > 480) {
+         const overtime = mins - 480;
+         // 規定：補休以30分鐘為單位，不滿30分鐘不計算 (無條件捨去至 30 的倍數)
+         earnedMins += Math.floor(overtime / 30) * 30; 
+      }
     });
-    const earned = Math.floor(earnedMins / 60); // 轉換為小時
+    const earned = earnedMins / 60; // 轉換為小時
 
     // 2. 計算本月已經使用或申請中的補休
     const currentMonthCompLeaves = leaveRecords.filter(l => 
@@ -2779,10 +2833,26 @@ const App = () => {
                       {logData.specialEventType === '隨喜40min' ? (
                         <input type="number" required placeholder="隨喜收費金額(全歸教練)" className="w-full bg-fuchsia-50 border border-fuchsia-200 rounded-xl p-3 text-fuchsia-600 shadow-inner font-black outline-none" value={logData.companyRevenue} onChange={(e) => setLogData({...logData, companyRevenue: e.target.value})} />
                       ) : logData.specialEventType?.startsWith('出差任務') ? (
-                        <div className="flex flex-col md:flex-row gap-2 w-full col-span-1 md:col-span-2">
-                          <input type="number" placeholder="認列堂數" className="w-full md:w-1/3 bg-amber-50 border border-amber-200 rounded-xl p-3 text-amber-600 shadow-inner font-black outline-none" value={logData.classes} onChange={(e) => setLogData({...logData, classes: e.target.value})} />
-                          <input type="number" placeholder="公司實收費用(元)" className="w-full md:w-1/3 bg-indigo-50 border border-indigo-200 rounded-xl p-3 text-indigo-600 shadow-inner font-black outline-none" value={logData.companyRevenue} onChange={(e) => setLogData({...logData, companyRevenue: e.target.value})} />
-                          <input type="number" placeholder="發給教練薪資(元)" className="w-full md:w-1/3 bg-fuchsia-50 border border-fuchsia-200 rounded-xl p-3 text-fuchsia-600 shadow-inner font-black outline-none" value={logData.eventSupportPay} onChange={(e) => setLogData({...logData, eventSupportPay: e.target.value})} />
+                        <div className="flex flex-col gap-3 w-full col-span-1 md:col-span-2">
+                          <div className="flex flex-col md:flex-row gap-2 w-full">
+                            <input type="number" placeholder="認列堂數" className="w-full md:w-1/3 bg-amber-50 border border-amber-200 rounded-xl p-3 text-amber-600 shadow-inner font-black outline-none" value={logData.classes} onChange={(e) => setLogData({...logData, classes: e.target.value})} />
+                            <input type="number" placeholder="公司實收費用(元)" className="w-full md:w-1/3 bg-indigo-50 border border-indigo-200 rounded-xl p-3 text-indigo-600 shadow-inner font-black outline-none" value={logData.companyRevenue} onChange={(e) => setLogData({...logData, companyRevenue: e.target.value})} />
+                            <input type="number" placeholder="發給教練活動薪資(元)" className="w-full md:w-1/3 bg-fuchsia-50 border border-fuchsia-200 rounded-xl p-3 text-fuchsia-600 shadow-inner font-black outline-none" value={logData.eventSupportPay} onChange={(e) => setLogData({...logData, eventSupportPay: e.target.value})} />
+                          </div>
+                          <div className="flex flex-col md:flex-row gap-2 w-full p-4 bg-slate-100 rounded-xl border border-slate-200">
+                             <div className="flex-1 space-y-1">
+                                <p className="text-[10px] text-slate-500 uppercase tracking-widest font-black pl-1">車程距離 (公里)</p>
+                                <input type="number" placeholder="距離 km" className="w-full bg-white border border-slate-200 rounded-xl p-3 text-slate-700 shadow-sm font-black outline-none" value={logData.transportDistance} onChange={(e) => {
+                                   const dist = e.target.value;
+                                   const fee = dist ? Math.round((Number(dist) / 10) * 31) : 0;
+                                   setLogData({...logData, transportDistance: dist, transportFee: fee.toString()});
+                                }} />
+                             </div>
+                             <div className="flex-1 space-y-1">
+                                <p className="text-[10px] text-slate-500 uppercase tracking-widest font-black pl-1">車馬費 (自動計算可修改)</p>
+                                <input type="number" placeholder="車馬費" className="w-full bg-white border border-slate-200 rounded-xl p-3 text-fuchsia-600 shadow-sm font-black outline-none" value={logData.transportFee} onChange={(e) => setLogData({...logData, transportFee: e.target.value})} />
+                             </div>
+                          </div>
                         </div>
                       ) : (
                         <div className="w-full bg-slate-100 border border-slate-200 rounded-xl p-3 shadow-inner text-sm font-black text-slate-500 flex items-center justify-center">
@@ -3038,7 +3108,7 @@ const App = () => {
             <div className="overflow-x-auto text-sm text-slate-600 font-black">
               <table className="w-full text-left border-collapse">
                 <thead className="bg-slate-100 text-[10px] text-slate-500 uppercase tracking-widest font-black">
-                  <tr><th className="px-12 py-10">教練姓名</th><th className="px-8 py-10 text-center">類型 / 底薪扣款</th><th className="px-8 py-10 text-center">月總堂數</th><th className="px-8 py-10 text-center text-amber-600">推銷獎金</th><th className="px-8 py-10 text-center text-sky-400">轉介獎勵</th><th className="px-8 py-10 text-center text-fuchsia-500">不固定薪資</th><th className="px-12 py-10 text-right">實領總計</th></tr>
+                  <tr><th className="px-12 py-10">教練姓名</th><th className="px-8 py-10 text-center">類型 / 底薪扣款</th><th className="px-8 py-10 text-center">月總堂數</th><th className="px-8 py-10 text-center text-amber-600">推銷獎金</th><th className="px-8 py-10 text-center text-fuchsia-500">不固定薪資</th><th className="px-12 py-10 text-right">實領總計</th></tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
                   {employees.map((emp) => {
@@ -3058,10 +3128,6 @@ const App = () => {
                         </td>
                         <td className="px-8 py-12 text-center text-4xl font-mono text-slate-800">{formatClasses(p.totalClasses)}</td>
             <td className="px-8 py-12 text-center text-2xl font-mono text-amber-600">${p.totalBonus.toLocaleString()}</td>
-            <td className="px-8 py-12 text-center text-2xl font-mono text-sky-500">
-              ${p.totalRef.toLocaleString()}
-              {p.totalRef > 0 && <div className="text-[10px] text-sky-600 bg-sky-50 px-2 py-1 rounded-lg mt-2 w-fit mx-auto font-sans font-black tracking-widest border border-sky-100">💰 轉介 {(p.totalRef / 100)} 堂</div>}
-            </td>
             <td className="px-8 py-12 text-center text-2xl font-mono text-fuchsia-500">${p.totalEventSupport.toLocaleString()}</td>
             <td className="px-12 py-12 text-right"> <div className="bg-amber-600 text-white px-10 py-6 rounded-[2.5rem] font-black text-4xl shadow-2xl tracking-tighter font-mono">${(p.grossSalary || 0).toLocaleString()}</div> </td>
                       </tr>
@@ -3346,6 +3412,7 @@ const App = () => {
                   { id: 'payroll', label: '薪資/稅務', icon: DollarSign },
                   { id: 'coach', label: '教練貢獻', icon: TrendingUp },
                   { id: 'customer', label: '資產餘額', icon: Users },
+                  { id: 'inventory', label: '商品庫存', icon: ShoppingCart },
                   { id: 'risk', label: '風控/對帳', icon: ShieldAlert }
                 ].map(t => (
                   <button key={t.id} onClick={() => setActiveFinanceTab(t.id)} className={`px-6 py-3 rounded-xl font-black text-xs transition-all flex items-center justify-center gap-2 whitespace-nowrap ${activeFinanceTab === t.id ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-500 hover:text-slate-700'}`}>
@@ -3483,13 +3550,13 @@ const App = () => {
                           <th className="p-6 text-right text-indigo-500">自訂底薪</th>
                           <th className="p-6 text-right text-amber-500">課費抽成總計</th>
                           <th className="p-6 text-right text-emerald-500">賣課獎金</th>
-                          <th className="p-6 text-right text-sky-500">轉介獎勵</th>
                           <th className="p-6 text-right text-fuchsia-500">不固定薪資</th>
                           <th className="p-6 text-right bg-slate-100 text-slate-800">應發(Gross)</th>
                           <th className="p-6 text-right text-rose-500">代扣稅/發票稅</th>
                           <th className="p-6 text-right text-rose-500">勞/健保(自)</th>
                           <th className="p-6 text-right bg-emerald-50 text-emerald-700 font-black text-sm">實發(Net)</th>
                           <th className="p-6 text-right border-l border-slate-200 text-slate-400">勞/健/退(公)</th>
+                          <th className="p-6 text-center text-amber-600">加給與扣除設定</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-100 text-slate-700">
@@ -3508,20 +3575,17 @@ const App = () => {
                             <td className="p-6 text-right"><input type="number" value={customBaseSalaries[coach.id] ?? ''} onChange={(e) => setCustomBaseSalaries(prev => ({...prev, [coach.id]: Number(e.target.value)}))} className="w-20 px-3 py-2 bg-indigo-50 border border-indigo-100 rounded-xl text-right outline-none font-mono text-indigo-700" /></td>
                 <td className="p-6 text-right font-mono text-amber-600 font-black">${coach.classIncome.toLocaleString()}</td>
                 <td className="p-6 text-right text-emerald-600 font-mono">{coach.salesBonus > 0 ? `$${coach.salesBonus.toLocaleString()}` : '-'}</td>
-                <td className="p-6 text-right font-mono text-sky-500">
-                  {coach.refBonus > 0 ? (
-                    <div className="flex flex-col items-end">
-                      <span>+${coach.refBonus.toLocaleString()}</span>
-                      <span className="text-[9px] bg-sky-100 text-sky-600 px-1.5 py-0.5 rounded mt-1 font-sans font-black tracking-widest border border-sky-200">💰 轉介 {coach.referralClassesGenerated} 堂</span>
-                    </div>
-                  ) : '-'}
-                </td>
                 <td className="p-6 text-right text-fuchsia-500 font-mono">{coach.eventSupportPay > 0 ? `$${coach.eventSupportPay.toLocaleString()}` : '-'}</td>
                 <td className="p-6 text-right bg-slate-100/50 font-mono text-sm">${coach.grossPay.toLocaleString()}</td>
                 <td className="p-6 text-right font-mono text-rose-500">{coach.isCompany ? `+${coach.invoiceVat.toLocaleString()}` : (coach.tax > 0 ? `-${coach.tax.toLocaleString()}` : '-')}</td>
                             <td className="p-6 text-right text-rose-500 font-mono">-{coach.laborInsEmp + coach.healthInsEmp}</td>
                             <td className="p-6 text-right bg-emerald-50/80 text-emerald-600 font-mono text-lg">${coach.netPay.toLocaleString()}</td>
                             <td className="p-6 text-right border-l border-slate-100 font-mono text-slate-400">{coach.laborInsCorp + coach.healthInsCorp + coach.pensionCorp}</td>
+                            <td className="p-6 text-center">
+                              <button onClick={() => setEditingSalaryAdj({ coachId: coach.id, coachName: coach.name, month: filterEndDate ? filterEndDate.slice(0,7) : getLocalMonthString(), prof: coach.professionalAllowance, proj: coach.projectBonus, mgr: coach.managerAllowance, other: coach.otherAllowance, supp: coach.suppHealth, ded: coach.otherDed })} className="px-3 py-1.5 bg-amber-100 text-amber-700 hover:bg-amber-200 rounded-xl text-xs font-black transition shadow-sm inline-flex items-center gap-1">
+                                <Settings2 size={14}/> 薪資條項目
+                              </button>
+                            </td>
                           </tr>
                         ))}
                       </tbody>
@@ -3621,6 +3685,35 @@ const App = () => {
                       </tbody>
                     </table>
                   </div>
+                </div>
+              </div>
+            )}
+
+            {activeFinanceTab === 'inventory' && (
+              <div className="space-y-6 animate-in zoom-in">
+                <div className="bg-white p-10 rounded-[3rem] shadow-sm border border-slate-200">
+                   <h3 className="text-2xl font-black mb-8 flex items-center text-slate-800 tracking-tighter"><ShoppingCart size={28} className="mr-3 text-teal-600"/> 實體商品庫存管理</h3>
+                   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+                      {inventoryStats.map(stat => (
+                         <div key={stat.product} className="bg-slate-50 p-6 rounded-[2rem] border border-slate-200 flex flex-col items-center shadow-inner">
+                            <span className="text-lg font-black text-slate-700 mb-4 bg-white px-4 py-2 rounded-xl shadow-sm border border-slate-100 w-full text-center">{stat.product}</span>
+                            <div className="grid grid-cols-2 gap-4 w-full mb-4">
+                               <div className="text-center">
+                                  <div className="text-[10px] text-slate-400 uppercase tracking-widest mb-1">系統售出</div>
+                                  <div className="text-2xl font-mono text-teal-600 font-black">{stat.sold}</div>
+                               </div>
+                               <div className="text-center bg-teal-50 border border-teal-100 rounded-xl p-2">
+                                  <div className="text-[10px] text-teal-600 uppercase tracking-widest mb-1">即時庫存</div>
+                                  <div className={`text-2xl font-mono font-black ${stat.remaining <= 5 ? 'text-rose-500' : 'text-teal-700'}`}>{stat.remaining}</div>
+                               </div>
+                            </div>
+                            <div className="w-full flex flex-col gap-1 border-t border-slate-200 pt-4">
+                               <label className="text-[10px] text-slate-500 font-black uppercase tracking-widest">設定總進貨量</label>
+                               <input type="number" className="w-full bg-white border border-slate-300 rounded-xl px-4 py-2 font-mono text-center font-black outline-none focus:border-teal-500" value={stat.stockIn || ''} onChange={(e) => handleUpdateInventory(stat.product, e.target.value)} placeholder="0" />
+                            </div>
+                         </div>
+                      ))}
+                   </div>
                 </div>
               </div>
             )}
@@ -3966,6 +4059,63 @@ const App = () => {
           </div>
         )}
 
+        {editingSalaryAdj && (
+          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[110] flex items-center justify-center p-4 font-black">
+            <div className="bg-white rounded-[3.5rem] w-full max-w-xl shadow-2xl p-10 relative border border-slate-200 font-sans">
+              <button onClick={() => setEditingSalaryAdj(null)} className="absolute top-8 right-8 text-slate-300 hover:text-slate-900 transition-all font-black"><X size={32} /></button>
+              <h3 className="text-2xl font-black mb-8 flex items-center gap-3 text-amber-600 uppercase tracking-widest"><DollarSign size={28} /> {editingSalaryAdj.coachName} - {editingSalaryAdj.month} 薪資加減項</h3>
+              <form onSubmit={async (e) => {
+                  e.preventDefault();
+                  triggerSync(async () => {
+                     const docId = `${editingSalaryAdj.coachId}_${editingSalaryAdj.month}`;
+                     await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'salary_adjustments', docId), {
+                        employeeId: editingSalaryAdj.coachId,
+                        month: editingSalaryAdj.month,
+                        professionalAllowance: Number(editingSalaryAdj.prof) || 0,
+                        projectBonus: Number(editingSalaryAdj.proj) || 0,
+                        managerAllowance: Number(editingSalaryAdj.mgr) || 0,
+                        otherAllowance: Number(editingSalaryAdj.other) || 0,
+                        supplementaryHealthIns: Number(editingSalaryAdj.supp) || 0,
+                        otherDeduction: Number(editingSalaryAdj.ded) || 0,
+                        updatedAt: new Date().toISOString()
+                     });
+                     setEditingSalaryAdj(null);
+                  });
+              }} className="space-y-6">
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-1 bg-indigo-50 p-3 rounded-xl border border-indigo-100">
+                    <p className="text-[10px] text-indigo-500 uppercase">專業加給 (+)</p>
+                    <input type="number" className="w-full bg-white border border-indigo-200 rounded-lg p-2 font-black outline-none text-indigo-700" value={editingSalaryAdj.prof} onChange={e => setEditingSalaryAdj({...editingSalaryAdj, prof: e.target.value})} />
+                  </div>
+                  <div className="space-y-1 bg-indigo-50 p-3 rounded-xl border border-indigo-100">
+                    <p className="text-[10px] text-indigo-500 uppercase">專案獎金 (+)</p>
+                    <input type="number" className="w-full bg-white border border-indigo-200 rounded-lg p-2 font-black outline-none text-indigo-700" value={editingSalaryAdj.proj} onChange={e => setEditingSalaryAdj({...editingSalaryAdj, proj: e.target.value})} />
+                  </div>
+                  <div className="space-y-1 bg-indigo-50 p-3 rounded-xl border border-indigo-100">
+                    <p className="text-[10px] text-indigo-500 uppercase">主管加給 (+)</p>
+                    <input type="number" className="w-full bg-white border border-indigo-200 rounded-lg p-2 font-black outline-none text-indigo-700" value={editingSalaryAdj.mgr} onChange={e => setEditingSalaryAdj({...editingSalaryAdj, mgr: e.target.value})} />
+                  </div>
+                  <div className="space-y-1 bg-indigo-50 p-3 rounded-xl border border-indigo-100">
+                    <p className="text-[10px] text-indigo-500 uppercase">其他津貼 (+)</p>
+                    <input type="number" className="w-full bg-white border border-indigo-200 rounded-lg p-2 font-black outline-none text-indigo-700" value={editingSalaryAdj.other} onChange={e => setEditingSalaryAdj({...editingSalaryAdj, other: e.target.value})} />
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-4 border-t border-slate-100 pt-4">
+                  <div className="space-y-1 bg-rose-50 p-3 rounded-xl border border-rose-100">
+                    <p className="text-[10px] text-rose-500 uppercase">健保補充保費 (-)</p>
+                    <input type="number" className="w-full bg-white border border-rose-200 rounded-lg p-2 font-black outline-none text-rose-700" value={editingSalaryAdj.supp} onChange={e => setEditingSalaryAdj({...editingSalaryAdj, supp: e.target.value})} />
+                  </div>
+                  <div className="space-y-1 bg-rose-50 p-3 rounded-xl border border-rose-100">
+                    <p className="text-[10px] text-rose-500 uppercase">其他保費/扣款 (-)</p>
+                    <input type="number" className="w-full bg-white border border-rose-200 rounded-lg p-2 font-black outline-none text-rose-700" value={editingSalaryAdj.ded} onChange={e => setEditingSalaryAdj({...editingSalaryAdj, ded: e.target.value})} />
+                  </div>
+                </div>
+                <button type="submit" className="w-full bg-amber-600 text-white py-4 rounded-2xl font-black text-xl shadow-xl active:scale-95 transition">確認儲存</button>
+              </form>
+            </div>
+          </div>
+        )}
+
         {selectedCoachForDetails && (
           <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4 md:p-8 font-black">
             <div className="bg-white rounded-[3.5rem] w-full max-w-5xl max-h-full flex flex-col shadow-2xl relative border border-slate-200 font-sans overflow-hidden animate-in zoom-in duration-200">
@@ -3974,8 +4124,11 @@ const App = () => {
                     <FileSpreadsheet size={32} /> {selectedCoachForDetails.name} - {summaryMonth} 課堂明細
                   </h3>
                   <div className="flex gap-3 items-center">
+                    <button onClick={() => setShowPayslipModal(true)} className="flex items-center gap-2 bg-indigo-600 text-white px-5 py-2.5 rounded-xl text-sm font-black shadow-md hover:bg-indigo-700 active:scale-95 transition-all">
+                      <FileSpreadsheet size={16} /> 數位薪資明細
+                    </button>
                     <button onClick={handleExportCoachPayslip} className="flex items-center gap-2 bg-emerald-600 text-white px-5 py-2.5 rounded-xl text-sm font-black shadow-md hover:bg-emerald-700 active:scale-95 transition-all">
-                      <Download size={16} /> 匯出薪資單
+                      <Download size={16} /> 匯出 CSV
                     </button>
                     <button onClick={() => setSelectedCoachForDetails(null)} className="text-slate-400 hover:text-slate-900 transition-all font-black bg-white p-2 rounded-full shadow-sm border border-slate-200"><X size={24} /></button>
                   </div>
@@ -3991,7 +4144,7 @@ const App = () => {
                        <th className="px-5 py-5 text-center">扣點/堂數</th>
                        <th className="px-5 py-5 text-right text-indigo-500">課費</th>
                        <th className="px-5 py-5 text-right text-amber-500">推銷獎金</th>
-                       <th className="px-5 py-5 text-right text-sky-500">轉介獎金及不固定薪資</th>
+                       <th className="px-5 py-5 text-right text-sky-500">不固定薪資</th>
                        <th className="px-6 py-5 text-right text-emerald-600 font-black">單筆合計</th>
                        <th className="px-5 py-5 text-right">操作</th>
                      </tr>
@@ -4045,7 +4198,6 @@ const App = () => {
                           </td>
                           <td className="px-5 py-5 text-right font-mono text-sky-500">
                             {row.calc.eventSupportPay > 0 ? `$${row.calc.eventSupportPay.toLocaleString()}` : '-'}
-                            {row.isSource && referralData[row.id] && referralData[row.id].eligibleClasses > 0 && <div className="text-[9px] bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded border border-amber-400 font-sans font-black tracking-widest mt-1 w-fit ml-auto">🤝 轉介紀錄 ({referralData[row.id].seqString})</div>}
                           </td>
                           <td className="px-6 py-5 text-right font-mono text-emerald-600 font-black text-lg">
                             ${row.calc.total.toLocaleString()}
@@ -4219,6 +4371,210 @@ const App = () => {
               </div>
             </div>
           )}
+
+        {showPayslipModal && selectedCoachForDetails && detailSettlement && (() => {
+            const isCompany = customIsCompany[selectedCoachForDetails.id] || false;
+            const origBase = detailSettlement.originalBaseSalary || 0;
+            
+            // 精準回推各項收入
+            const classIncome = detailSettlement.grossSalary - detailSettlement.baseSalary - detailSettlement.totalBonus - detailSettlement.totalEventSupport - detailSettlement.totalTransportFee - detailSettlement.professionalAllowance - detailSettlement.projectBonus - detailSettlement.managerAllowance - detailSettlement.otherAllowance;
+            
+            const salesBonus = detailSettlement.totalBonus || 0;
+            
+            const monthlyGross = detailSettlement.grossSalary; 
+            let vat = 0, labor = 0, health = 0, tax = 0;
+
+            if (isCompany) {
+                vat = Math.round(monthlyGross * CONFIG.vatRate);
+            } else {
+                const isPartTime = selectedCoachForDetails.type?.startsWith('temp') || false;
+                if (!isPartTime && selectedCoachForDetails.type !== 'project') { 
+                    const lBracket = getLaborBracket(monthlyGross);
+                    const hBracket = getHealthBracket(monthlyGross);
+                    labor = Math.round(lBracket * CONFIG.laborRate * 0.2);
+                    health = Math.round(hBracket * CONFIG.healthRate * 0.3);
+                } else if (isPartTime) {
+                    if (monthlyGross >= 27470) health = Math.round(monthlyGross * 0.0211); 
+                }
+
+                const taxThreshold = isPartTime ? CONFIG.taxThresholdTemp : CONFIG.taxThresholdFormal;
+                if (monthlyGross >= taxThreshold) {
+                    tax = Math.round(monthlyGross * CONFIG.taxRate);
+                }
+            }
+
+            const leaveDed = detailSettlement.leaveDeduction || 0;
+            const suppHealth = detailSettlement.supplementaryHealthIns || 0;
+            const otherDed = detailSettlement.otherDeduction || 0;
+            
+            const totalEarnings = origBase + detailSettlement.professionalAllowance + classIncome + salesBonus + detailSettlement.projectBonus + detailSettlement.managerAllowance + detailSettlement.totalTransportFee + detailSettlement.totalEventSupport + detailSettlement.otherAllowance + vat;
+            const totalDeductions = labor + health + suppHealth + tax + otherDed + leaveDed;
+            const netPay = totalEarnings - totalDeductions;
+
+            let tenureString = "未填寫入職日";
+            let formattedStartDate = "-";
+            if (selectedCoachForDetails.startDate) {
+                const start = new Date(selectedCoachForDetails.startDate);
+                const now = new Date(summaryMonth + '-01');
+                let years = now.getFullYear() - start.getFullYear();
+                let months = now.getMonth() - start.getMonth();
+                if (months < 0) {
+                    years--;
+                    months += 12;
+                }
+                tenureString = `${Math.max(0, years)}年${Math.max(0, months)}個月`;
+                formattedStartDate = `${start.getFullYear()}年${String(start.getMonth()+1).padStart(2,'0')}月${String(start.getDate()).padStart(2,'0')}日`;
+            }
+
+            const empLeavesTotalHours = leaveRecords
+                .filter(l => l.employeeId === selectedCoachForDetails.id && l.date.startsWith(summaryMonth) && l.status === 'approved')
+                .reduce((sum, l) => sum + Number(l.hours), 0);
+
+            const today = new Date();
+
+            return (
+                <div className="fixed inset-0 bg-slate-900/90 backdrop-blur-sm z-[200] flex items-center justify-center p-4 md:p-8 font-sans print:p-0 print:bg-white print:block overflow-y-auto">
+                    <div className="bg-white w-full max-w-5xl shadow-2xl relative border border-slate-300 font-sans print:shadow-none print:border-none print:w-full my-auto">
+                        
+                        {/* 畫面控制按鈕 (列印時隱藏) */}
+                        <div className="absolute -top-14 right-0 flex gap-2 print:hidden">
+                            {userRole === 'boss' && (
+                                <button onClick={() => {
+                                   const newProf = prompt("請輸入【專業加給】金額：", detailSettlement.professionalAllowance);
+                                   const newProj = prompt("請輸入【專案獎金】金額：", detailSettlement.projectBonus);
+                                   const newMgr = prompt("請輸入【主管加給】金額：", detailSettlement.managerAllowance);
+                                   const newOther = prompt("請輸入【其他津貼】金額：", detailSettlement.otherAllowance);
+                                   const newSuppHealth = prompt("請輸入【健保補充保費(扣除)】金額：", detailSettlement.supplementaryHealthIns);
+                                   const newOtherDed = prompt("請輸入【其他保費(扣除)】金額：", detailSettlement.otherDeduction);
+                                   
+                                   if (newProf !== null) {
+                                      const docId = `${selectedCoachForDetails.id}_${summaryMonth}`;
+                                      setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'salary_adjustments', docId), {
+                                         employeeId: selectedCoachForDetails.id,
+                                         month: summaryMonth,
+                                         professionalAllowance: Number(newProf) || 0,
+                                         projectBonus: Number(newProj) || 0,
+                                         managerAllowance: Number(newMgr) || 0,
+                                         otherAllowance: Number(newOther) || 0,
+                                         supplementaryHealthIns: Number(newSuppHealth) || 0,
+                                         otherDeduction: Number(newOtherDed) || 0,
+                                         updatedAt: new Date().toISOString()
+                                      });
+                                   }
+                                }} className="bg-amber-600 text-white px-5 py-2.5 rounded-lg font-black shadow-lg flex items-center gap-2 hover:bg-amber-700 active:scale-95 transition-all">
+                                    ⚙️ 編輯加給與扣除額
+                                </button>
+                            )}
+                            <button onClick={() => window.print()} className="bg-indigo-600 text-white px-5 py-2.5 rounded-lg font-black shadow-lg flex items-center gap-2 hover:bg-indigo-700 active:scale-95 transition-all">
+                                🖨️ 列印 / 存檔PDF
+                            </button>
+                            <button onClick={() => setShowPayslipModal(false)} className="bg-white text-slate-700 px-5 py-2.5 rounded-lg font-black shadow-lg hover:bg-slate-50 active:scale-95 transition-all border border-slate-200">
+                                關閉
+                            </button>
+                        </div>
+
+                        <div className="p-8 md:p-12 text-slate-800 border-[8px] border-blue-900/5 print:border-none">
+                            {/* 表頭區塊 */}
+                            <div className="flex flex-col md:flex-row justify-between items-end border-b-[3px] border-blue-900 pb-3 mb-6">
+                                <div className="flex items-center gap-4">
+                                    <div className="w-14 h-14 rounded-full border-2 border-slate-800 flex items-center justify-center font-black text-2xl tracking-tighter bg-white shadow-sm shrink-0">
+                                       JD
+                                    </div>
+                                    <div className="flex flex-col md:flex-row md:items-end gap-2 md:gap-6">
+                                        <span className="text-xl md:text-2xl font-black text-slate-800 tracking-widest">築動運動防護</span>
+                                        <span className="text-2xl md:text-3xl font-bold text-blue-900 tracking-widest">薪資給與明細表</span>
+                                    </div>
+                                </div>
+                                <div className="text-sm font-bold text-slate-700 mt-4 md:mt-0">
+                                    發給日：{today.getFullYear()}年{today.getMonth()+1}月{today.getDate()}日
+                                </div>
+                            </div>
+
+                            {/* 員工基本資料 */}
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 md:gap-16 mb-6 bg-blue-50/50 p-5 font-bold text-sm text-slate-700 border border-blue-100">
+                                <div className="space-y-3">
+                                    <div className="flex"><span className="w-24 md:w-32 text-slate-500 tracking-widest">部　　門：</span><span className="text-slate-900">教練部</span></div>
+                                    <div className="flex"><span className="w-24 md:w-32 text-slate-500 tracking-widest">職　　稱：</span><span className="text-slate-900">{detailSettlement.typeLabel} {selectedCoachForDetails.isBossNoPay ? '(負責人)' : ''}</span></div>
+                                </div>
+                                <div className="space-y-3">
+                                    <div className="flex"><span className="w-24 md:w-32 text-slate-500 tracking-widest">到 職 日：</span><span className="text-slate-900 font-mono text-base">{formattedStartDate}</span></div>
+                                    <div className="flex"><span className="w-24 md:w-32 text-slate-500 tracking-widest">到職年數：</span><span className="text-slate-900 font-mono text-base">{tenureString}</span></div>
+                                </div>
+                            </div>
+
+                            {/* 薪資明細三欄式表格 */}
+                            <div className="grid grid-cols-1 lg:grid-cols-3 border-2 border-blue-200 bg-white">
+                                {/* 第一欄：應發項目 */}
+                                <div className="border-b-2 lg:border-b-0 lg:border-r-2 border-blue-200 flex flex-col">
+                                    <div className="bg-blue-100 p-3 font-bold text-blue-900 border-b-2 border-blue-200 text-lg tracking-widest">一、應發項目</div>
+                                    <div className="flex justify-between p-3 border-b border-blue-100 text-sm font-bold text-slate-700 bg-slate-50"><span>項目</span><span>金額</span></div>
+                                    <div className="flex justify-between p-3 border-b border-slate-100 text-sm font-bold text-slate-800"><span>本薪</span><span className="font-mono">{origBase.toLocaleString()}</span></div>
+                                    <div className="flex justify-between p-3 border-b border-slate-100 text-sm font-bold text-slate-800"><span>專業加給</span><span className="font-mono">{detailSettlement.professionalAllowance.toLocaleString()}</span></div>
+                                    <div className="flex justify-between p-3 border-b border-slate-100 text-sm font-bold text-slate-800"><span>課堂獎金</span><span className="font-mono">{classIncome.toLocaleString()}</span></div>
+                                    <div className="flex justify-between p-3 border-b border-slate-100 text-sm font-bold text-slate-800"><span>專案獎金</span><span className="font-mono">{detailSettlement.projectBonus.toLocaleString()}</span></div>
+                                    <div className="flex justify-between p-3 border-b border-slate-100 text-sm font-bold text-slate-800"><span>主管加給</span><span className="font-mono">{detailSettlement.managerAllowance.toLocaleString()}</span></div>
+                                    <div className="flex justify-between p-3 border-b border-slate-100 text-sm font-bold text-slate-800"><span>交通津貼</span><span className="font-mono">{detailSettlement.totalTransportFee.toLocaleString()}</span></div>
+                                    <div className="flex justify-between p-3 border-b border-slate-100 text-sm font-bold text-slate-800"><span>其他津貼</span><span className="font-mono">{detailSettlement.otherAllowance.toLocaleString()}</span></div>
+                                    <div className="flex justify-between p-3 border-b border-slate-100 text-sm font-bold text-slate-800 text-slate-400"><span>(銷售推廣獎金)</span><span className="font-mono">{salesBonus.toLocaleString()}</span></div>
+                                    <div className="flex justify-between p-3 border-b border-slate-100 text-sm font-bold text-slate-800 text-slate-400"><span>(不固定活動薪資)</span><span className="font-mono">{detailSettlement.totalEventSupport.toLocaleString()}</span></div>
+                                    {isCompany && <div className="flex justify-between p-3 border-b border-slate-100 text-sm font-bold text-slate-800 text-slate-400"><span>營業稅 (5%)</span><span className="font-mono">{vat.toLocaleString()}</span></div>}
+                                    
+                                    <div className="flex-1 min-h-[60px]"></div>
+
+                                    <div className="bg-blue-100/40 flex justify-between p-4 border-t-2 border-blue-200 font-bold text-blue-900 text-lg"><span>應發合計</span><span className="font-mono">{totalEarnings.toLocaleString()}</span></div>
+                                </div>
+
+                                {/* 第二欄：扣除項目 */}
+                                <div className="border-b-2 lg:border-b-0 lg:border-r-2 border-blue-200 flex flex-col">
+                                    <div className="bg-blue-100 p-3 font-bold text-blue-900 border-b-2 border-blue-200 text-lg tracking-widest flex justify-between items-center">
+                                        二、扣除項目 <span className="text-red-500 text-sm">●</span>
+                                    </div>
+                                    <div className="flex justify-between p-3 border-b border-blue-100 text-sm font-bold text-slate-700 bg-slate-50"><span>項目</span><span>金額</span></div>
+                                    <div className="flex justify-between p-3 border-b border-slate-100 text-sm font-bold text-slate-800"><span>勞工保險</span><span className="font-mono">{labor.toLocaleString()}</span></div>
+                                    <div className="flex justify-between p-3 border-b border-slate-100 text-sm font-bold text-slate-800"><span>健康保險</span><span className="font-mono">{health.toLocaleString()}</span></div>
+                                    <div className="flex justify-between p-3 border-b border-slate-100 text-sm font-bold text-slate-800"><span>健保補充保費</span><span className="font-mono">{suppHealth.toLocaleString()}</span></div>
+                                    <div className="flex justify-between p-3 border-b border-slate-100 text-sm font-bold text-slate-800"><span>所得稅</span><span className="font-mono">{tax.toLocaleString()}</span></div>
+                                    <div className="flex justify-between p-3 border-b border-slate-100 text-sm font-bold text-slate-800"><span>其他保費</span><span className="font-mono">{otherDed.toLocaleString()}</span></div>
+                                    {leaveDed > 0 && <div className="flex justify-between p-3 border-b border-slate-100 text-sm font-bold text-slate-800 text-slate-400"><span>(請假缺勤扣除)</span><span className="font-mono">{leaveDed.toLocaleString()}</span></div>}
+                                    
+                                    <div className="flex-1 min-h-[60px]"></div>
+
+                                    <div className="bg-blue-50/50 flex justify-between p-3 border-t-2 border-blue-200 font-bold text-slate-800 text-base"><span>扣除合計</span><span className="font-mono">{totalDeductions.toLocaleString()}</span></div>
+                                    <div className="bg-blue-100 flex justify-between p-4 border-t-2 border-blue-200 font-black text-blue-900 text-xl"><span>實發金額</span><span className="font-mono">{netPay.toLocaleString()}</span></div>
+                                </div>
+
+                                {/* 第三欄：其他與出勤資訊 */}
+                                <div className="flex flex-col">
+                                    <div className="bg-blue-100 p-3 font-bold text-blue-900 border-b-2 border-blue-200 text-lg tracking-widest">三、出勤狀況</div>
+                                    <div className="flex justify-between p-3 border-b border-slate-100 text-sm font-bold text-slate-800"><span>排休/無課天數</span><span className="font-mono text-base">{coachRestDaysInfo.count} 天</span></div>
+                                    <div className="flex justify-between p-3 border-b border-slate-100 text-sm font-bold text-slate-800"><span>請假時數(已核)</span><span className="font-mono text-base">{empLeavesTotalHours} 小時</span></div>
+                                    <div className="flex justify-between p-3 text-sm font-bold text-slate-400"><span>超時加班時數</span><span className="font-mono">轉補休</span></div>
+
+                                    <div className="bg-blue-100 p-3 font-bold text-blue-900 border-b-2 border-blue-200 border-t-2 mt-auto text-lg tracking-widest">四、其他資訊</div>
+                                    <div className="flex justify-between p-3 border-b border-slate-100 text-sm font-bold text-slate-800"><span>計薪月份</span><span className="font-mono text-base">{summaryMonth}</span></div>
+                                    <div className="flex justify-between p-3 border-b border-slate-100 text-sm font-bold text-slate-800"><span>本月結算總堂數</span><span className="font-mono text-base">{formatClasses(detailSettlement.totalClasses)} 堂</span></div>
+                                </div>
+                            </div>
+
+                            {/* 底部備註與浮水印 */}
+                            <div className="mt-6 flex flex-col md:flex-row justify-between items-end text-sm text-slate-700 font-bold gap-8">
+                                <div>
+                                    <p className="text-base text-slate-800 mb-2">備註：</p>
+                                    <ol className="list-decimal pl-5 space-y-1.5 text-slate-600">
+                                        <li>本薪資單為 {summaryMonth} 之薪資發放明細。</li>
+                                        <li>各項津貼、獎金及扣款依公司勞動契約與相關規章辦理。</li>
+                                        <li>若對明細有任何疑問，請於發放日起三日內洽詢營運負責人。</li>
+                                    </ol>
+                                </div>
+                                <div className="text-blue-900/10 text-4xl font-black tracking-widest italic print:text-blue-900/15">
+                                    感謝您的辛勞
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            );
+        })()}
 
         <footer className="mt-32 text-center border-t border-slate-300 pt-16 pb-24 opacity-60 font-black tracking-tighter uppercase font-sans">
           <p className="text-slate-600 text-[11px] tracking-[1.5em] mb-4">築動運動防護 • JD Rebuild Training Lab Integrated Engine</p>
