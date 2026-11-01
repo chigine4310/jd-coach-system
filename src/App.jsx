@@ -32,16 +32,7 @@ import {
   ChevronLeft, ChevronRight, CalendarCheck
 } from 'lucide-react';
 
-const firebaseConfig = {
-  apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
-  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
-  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
-  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
-  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
-  appId: import.meta.env.VITE_FIREBASE_APP_ID,
-  measurementId: import.meta.env.VITE_FIREBASE_MEASUREMENT_ID
-};
-
+const firebaseConfig = JSON.parse(__firebase_config);
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
@@ -4441,6 +4432,52 @@ const App = () => {
 
             const today = new Date();
 
+            const handleSharePayslip = () => {
+                const text = `【築動運動防護 - 薪資明細】
+員工：${selectedCoachForDetails.name}
+計薪月份：${summaryMonth}
+
+一、應發項目 (合計 $${totalEarnings.toLocaleString()})
+- 本薪：$${origBase.toLocaleString()}
+- 專業加給：$${detailSettlement.professionalAllowance.toLocaleString()}
+- 課堂獎金：$${classIncome.toLocaleString()}
+- 專案獎金：$${detailSettlement.projectBonus.toLocaleString()}
+- 主管加給：$${detailSettlement.managerAllowance.toLocaleString()}
+- 交通津貼：$${detailSettlement.totalTransportFee.toLocaleString()}
+- 其他津貼：$${detailSettlement.otherAllowance.toLocaleString()}
+- 銷售推廣獎金：$${salesBonus.toLocaleString()}
+- 出差活動薪資：$${detailSettlement.totalEventSupport.toLocaleString()}
+
+二、扣除項目 (合計 $${totalDeductions.toLocaleString()})
+- 勞工保險：$${labor.toLocaleString()}
+- 健康保險：$${health.toLocaleString()}
+- 健保補充保費：$${suppHealth.toLocaleString()}
+- 所得稅：$${tax.toLocaleString()}
+- 其他保費：$${otherDed.toLocaleString()}
+${leaveDed > 0 ? `- 請假缺勤扣除：$${leaveDed.toLocaleString()}\n` : ''}
+三、實發金額：$${netPay.toLocaleString()}
+
+四、出勤狀況與其他資訊
+- 本月結算堂數：${formatClasses(detailSettlement.totalClasses)} 堂
+- 排休/無課天數：${coachRestDaysInfo.count} 天
+- 請假時數(已核)：${empLeavesTotalHours} 小時
+
+如有疑問請於發放日起三日內洽詢營運負責人。`;
+
+                if (navigator.share) {
+                    navigator.share({
+                        title: `${selectedCoachForDetails.name} - ${summaryMonth} 薪資明細`,
+                        text: text
+                    }).catch(err => {
+                        navigator.clipboard.writeText(text);
+                        alert("已複製薪資明細文字，您可以直接貼上給員工！");
+                    });
+                } else {
+                    navigator.clipboard.writeText(text);
+                    alert("已複製薪資明細文字，您可以直接貼上給員工！");
+                }
+            };
+
             return (
                 <div className="fixed inset-0 bg-slate-900/90 backdrop-blur-sm z-[200] flex items-center justify-center p-4 md:p-8 font-sans print:p-0 print:bg-white print:block overflow-y-auto">
                     <div className="bg-white w-full max-w-5xl shadow-2xl relative border border-slate-300 font-sans print:shadow-none print:border-none print:w-full my-auto">
@@ -4474,8 +4511,11 @@ const App = () => {
                                     ⚙️ 編輯加給與扣除額
                                 </button>
                             )}
+                            <button onClick={handleSharePayslip} className="bg-emerald-600 text-white px-5 py-2.5 rounded-lg font-black shadow-lg flex items-center gap-2 hover:bg-emerald-700 active:scale-95 transition-all">
+                                <Share2 size={16} /> 分享 / 複製文字
+                            </button>
                             <button onClick={() => window.print()} className="bg-indigo-600 text-white px-5 py-2.5 rounded-lg font-black shadow-lg flex items-center gap-2 hover:bg-indigo-700 active:scale-95 transition-all">
-                                🖨️ 列印 / 存檔PDF
+                                🖨️ 下載PDF / 列印
                             </button>
                             <button onClick={() => setShowPayslipModal(false)} className="bg-white text-slate-700 px-5 py-2.5 rounded-lg font-black shadow-lg hover:bg-slate-50 active:scale-95 transition-all border border-slate-200">
                                 關閉
@@ -4491,7 +4531,7 @@ const App = () => {
                                     </div>
                                     <div className="flex flex-col md:flex-row md:items-end gap-2 md:gap-6">
                                         <span className="text-xl md:text-2xl font-black text-slate-800 tracking-widest">築動運動防護</span>
-                                        <span className="text-2xl md:text-3xl font-bold text-blue-900 tracking-widest">薪資給與明細表</span>
+                                        <span className="text-2xl md:text-3xl font-bold text-blue-900 tracking-widest">數位薪資明細表</span>
                                     </div>
                                 </div>
                                 <div className="text-sm font-bold text-slate-700 mt-4 md:mt-0">
@@ -4502,12 +4542,12 @@ const App = () => {
                             {/* 員工基本資料 */}
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 md:gap-16 mb-6 bg-blue-50/50 p-5 font-bold text-sm text-slate-700 border border-blue-100">
                                 <div className="space-y-3">
-                                    <div className="flex"><span className="w-24 md:w-32 text-slate-500 tracking-widest">部　　門：</span><span className="text-slate-900">教練部</span></div>
+                                    <div className="flex"><span className="w-24 md:w-32 text-slate-500 tracking-widest">員工姓名：</span><span className="text-slate-900 text-lg leading-none">{selectedCoachForDetails.name}</span></div>
                                     <div className="flex"><span className="w-24 md:w-32 text-slate-500 tracking-widest">職　　稱：</span><span className="text-slate-900">{detailSettlement.typeLabel} {selectedCoachForDetails.isBossNoPay ? '(負責人)' : ''}</span></div>
                                 </div>
                                 <div className="space-y-3">
                                     <div className="flex"><span className="w-24 md:w-32 text-slate-500 tracking-widest">到 職 日：</span><span className="text-slate-900 font-mono text-base">{formattedStartDate}</span></div>
-                                    <div className="flex"><span className="w-24 md:w-32 text-slate-500 tracking-widest">到職年數：</span><span className="text-slate-900 font-mono text-base">{tenureString}</span></div>
+                                    <div className="flex"><span className="w-24 md:w-32 text-slate-500 tracking-widest">計薪月份：</span><span className="text-slate-900 font-mono text-base bg-blue-100 px-2 py-0.5 rounded">{summaryMonth}</span></div>
                                 </div>
                             </div>
 
@@ -4524,9 +4564,9 @@ const App = () => {
                                     <div className="flex justify-between p-3 border-b border-slate-100 text-sm font-bold text-slate-800"><span>主管加給</span><span className="font-mono">{detailSettlement.managerAllowance.toLocaleString()}</span></div>
                                     <div className="flex justify-between p-3 border-b border-slate-100 text-sm font-bold text-slate-800"><span>交通津貼</span><span className="font-mono">{detailSettlement.totalTransportFee.toLocaleString()}</span></div>
                                     <div className="flex justify-between p-3 border-b border-slate-100 text-sm font-bold text-slate-800"><span>其他津貼</span><span className="font-mono">{detailSettlement.otherAllowance.toLocaleString()}</span></div>
-                                    <div className="flex justify-between p-3 border-b border-slate-100 text-sm font-bold text-slate-800 text-slate-400"><span>(銷售推廣獎金)</span><span className="font-mono">{salesBonus.toLocaleString()}</span></div>
-                                    <div className="flex justify-between p-3 border-b border-slate-100 text-sm font-bold text-slate-800 text-slate-400"><span>(不固定活動薪資)</span><span className="font-mono">{detailSettlement.totalEventSupport.toLocaleString()}</span></div>
-                                    {isCompany && <div className="flex justify-between p-3 border-b border-slate-100 text-sm font-bold text-slate-800 text-slate-400"><span>營業稅 (5%)</span><span className="font-mono">{vat.toLocaleString()}</span></div>}
+                                    <div className="flex justify-between p-3 border-b border-slate-100 text-sm font-bold text-slate-800"><span>銷售推廣獎金</span><span className="font-mono">{salesBonus.toLocaleString()}</span></div>
+                                    <div className="flex justify-between p-3 border-b border-slate-100 text-sm font-bold text-slate-800"><span>出差活動薪資</span><span className="font-mono">{detailSettlement.totalEventSupport.toLocaleString()}</span></div>
+                                    {isCompany && <div className="flex justify-between p-3 border-b border-slate-100 text-sm font-bold text-slate-800"><span>營業稅 (5%)</span><span className="font-mono">{vat.toLocaleString()}</span></div>}
                                     
                                     <div className="flex-1 min-h-[60px]"></div>
 
@@ -4555,13 +4595,13 @@ const App = () => {
                                 {/* 第三欄：其他與出勤資訊 */}
                                 <div className="flex flex-col">
                                     <div className="bg-blue-100 p-3 font-bold text-blue-900 border-b-2 border-blue-200 text-lg tracking-widest">三、出勤狀況</div>
+                                    <div className="flex justify-between p-3 border-b border-slate-100 text-sm font-bold text-slate-800"><span>本月結算總堂數</span><span className="font-mono text-base text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded">{formatClasses(detailSettlement.totalClasses)} 堂</span></div>
                                     <div className="flex justify-between p-3 border-b border-slate-100 text-sm font-bold text-slate-800"><span>排休/無課天數</span><span className="font-mono text-base">{coachRestDaysInfo.count} 天</span></div>
                                     <div className="flex justify-between p-3 border-b border-slate-100 text-sm font-bold text-slate-800"><span>請假時數(已核)</span><span className="font-mono text-base">{empLeavesTotalHours} 小時</span></div>
-                                    <div className="flex justify-between p-3 text-sm font-bold text-slate-400"><span>超時加班時數</span><span className="font-mono">轉補休</span></div>
+                                    <div className="flex justify-between p-3 text-sm font-bold text-slate-400"><span>超時加班時數</span><span className="font-mono">依規定轉補休</span></div>
 
                                     <div className="bg-blue-100 p-3 font-bold text-blue-900 border-b-2 border-blue-200 border-t-2 mt-auto text-lg tracking-widest">四、其他資訊</div>
-                                    <div className="flex justify-between p-3 border-b border-slate-100 text-sm font-bold text-slate-800"><span>計薪月份</span><span className="font-mono text-base">{summaryMonth}</span></div>
-                                    <div className="flex justify-between p-3 border-b border-slate-100 text-sm font-bold text-slate-800"><span>本月結算總堂數</span><span className="font-mono text-base">{formatClasses(detailSettlement.totalClasses)} 堂</span></div>
+                                    <div className="flex justify-between p-3 border-b border-slate-100 text-sm font-bold text-slate-800"><span>入職年數</span><span className="font-mono text-base">{tenureString}</span></div>
                                 </div>
                             </div>
 
