@@ -32,16 +32,7 @@ import {
   ChevronLeft, ChevronRight, CalendarCheck
 } from 'lucide-react';
 
-const firebaseConfig = {
-  apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
-  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
-  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
-  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
-  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
-  appId: import.meta.env.VITE_FIREBASE_APP_ID,
-  measurementId: import.meta.env.VITE_FIREBASE_MEASUREMENT_ID
-};
-
+const firebaseConfig = JSON.parse(__firebase_config);
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
@@ -216,6 +207,8 @@ const App = () => {
   const [expenseData, setExpenseData] = useState({
     employeeId: '', date: getLocalDateString(), item: '', amount: '', invoiceType: '電子發票', invoiceTypeOther: ''
   });
+  
+  const [makeupData, setMakeupData] = useState({ date: getLocalDateString(), clockInTime: '', clockOutTime: '', reason: '' });
 
   const [logData, setLogData] = useState({
     employeeId: '', customerName: '', deductFromCustomerId: '', referralSourceId: '',
@@ -252,8 +245,11 @@ const App = () => {
         if (matchedCustomer?.customerType === 'activity') return;
 
         const isNewAth = log.classDuration?.startsWith('athlete_') && log.classDuration !== 'athlete_buy';
+        const isOldAth = log.isAthleteProject && !isNewAth && log.classDuration !== 'athlete_buy';
         const rawCls = Number(log.classes) || 0;
-        const valCls = isNewAth ? rawCls / 3 : rawCls;
+        
+        let valCls = rawCls;
+        if (isNewAth || isOldAth) valCls = 1;
 
         if (valCls > 0) {
           const trackingKey = `${log.referralSourceId}_${customerKey}`;
@@ -399,16 +395,15 @@ const App = () => {
     const isActivity = matchedCustomer?.customerType === 'activity';
     const isNewAthlete = log.classDuration?.startsWith('athlete_') && log.classDuration !== 'athlete_buy';
     const isOldAthlete = log.isAthleteProject && !isNewAthlete && log.classDuration !== 'athlete_buy';
+    const isAthlete = isNewAthlete || isOldAthlete;
     
     let rawClsCount = log.specialEventType ? (Number(log.classes) || 1) : (Number(log.classes) || 0);
-    if (isActivity) rawClsCount = 0; 
     
     const isOvertimeLog = log.classDuration === 'overtime30min' || log.classDuration === 'overtime60min'; // 保留歷史紀錄判定
     
-    let validClasses = isNewAthlete ? (rawClsCount / 3) : rawClsCount;
-    if (isOvertimeLog) {
-       validClasses = 0; // 加時不計入累計堂數 (歷史資料)
-    }
+    let validClasses = rawClsCount;
+    if (isAthlete) validClasses = 1; // 運動員專案每一次上課不管扣幾點都算一堂課一個序號
+    if (isActivity || isOvertimeLog) validClasses = 0;
     
     let classPay = 0;
     let cumulative = baseCount;
@@ -440,62 +435,57 @@ const App = () => {
       classPay = Number(log.companyRevenue) || 0; 
     } else if (log.specialEventType === '進階體驗90min') {
       classPay = 500;
-    } else if (log.specialEventType?.startsWith('出差任務')) {
-      classPay = 0; // 修正：出差任務不計算常規課堂抽成，僅以「活動薪資」與「車馬費」發放
     } else if (log.classDuration === 'athlete_buy') {
       classPay = 0;
+    } else if (isNewAthlete) {
+      classPay = rawClsCount * 250;
+    } else if (isOldAthlete) {
+      classPay = rawClsCount * 750;
     } else {
-        const X = log.classFee ? Number(log.classFee) : (
-            log.classDuration === '150min' ? 4300 :
-            log.classDuration === '120min' ? 3400 :
-            log.classDuration === '60min' || log.classDuration === 'overtime60min' ? 1800 : 
-            log.classDuration === 'overtime30min' ? 900 : 2500
+        const X = log.specialEventType?.startsWith('出差任務') ? 2500 : (
+            log.classFee ? Number(log.classFee) : (
+                log.classDuration === '150min' ? 4300 :
+                log.classDuration === '120min' ? 3400 :
+                log.classDuration === '60min' || log.classDuration === 'overtime60min' ? 1800 : 
+                log.classDuration === 'overtime30min' ? 900 : 2500
+            )
         ); 
-        const clsCount = rawClsCount;
         
-        for (let i = 0; i < clsCount; i++) {
-          if (!isOvertimeLog) {
-             cumulative += (isNewAthlete ? 1/3 : 1);
-          }
+        for (let i = 0; i < validClasses; i++) {
+          cumulative += 1;
           
-          if (isNewAthlete) {
-             classPay += 250;
-          } else if (isOldAthlete) {
-             classPay += 750;
-          } else {
-              if (empType === 'probationA') {
-                classPay += 1000; 
-              } else if (empType === 'probationB') {
-                if (cumulative <= 20) classPay += X * 0.30;
-                else if (cumulative <= 30) classPay += X * 0.32;
-                else if (cumulative <= 40) classPay += X * 0.34;
-                else classPay += X * 0.36;
-              } else if (empType === 'tempA') {
-                classPay += X * 0.44;
-              } else if (empType === 'tempB') {
-                classPay += X * 0.40;
-              } else if (empType === 'formalA') {
-                let m = 0; 
-                if (cumulative > Math.max(0, 35 - discount)) {
-                  if (cumulative >= Math.max(0, 76 - discount)) m = 0.5;
-                  else if (cumulative >= Math.max(0, 66 - discount)) m = 0.48;
-                  else if (cumulative >= Math.max(0, 56 - discount)) m = 0.46;
-                  else if (cumulative >= Math.max(0, 46 - discount)) m = 0.42;
-                  else m = 0.4;
-                }
-                classPay += X * m; 
-              } else if (empType === 'formalB') {
-                 let m = 0;
-                 if (cumulative > Math.max(0, 25 - discount)) {
-                    if (cumulative >= Math.max(0, 76 - discount)) m = 0.46;
-                    else if (cumulative >= Math.max(0, 66 - discount)) m = 0.44;
-                    else if (cumulative >= Math.max(0, 56 - discount)) m = 0.42;
-                    else if (cumulative >= Math.max(0, 46 - discount)) m = 0.38;
-                    else if (cumulative >= Math.max(0, 36 - discount)) m = 0.36;
-                    else m = 0.36; 
-                 }
-                 classPay += X * m;
-              }
+          if (empType === 'probationA') {
+            classPay += 1000; 
+          } else if (empType === 'probationB') {
+            if (cumulative <= 20) classPay += X * 0.30;
+            else if (cumulative <= 30) classPay += X * 0.32;
+            else if (cumulative <= 40) classPay += X * 0.34;
+            else classPay += X * 0.36;
+          } else if (empType === 'tempA') {
+            classPay += X * 0.44;
+          } else if (empType === 'tempB') {
+            classPay += X * 0.40;
+          } else if (empType === 'formalA') {
+            let m = 0; 
+            if (cumulative > Math.max(0, 35 - discount)) {
+              if (cumulative >= Math.max(0, 76 - discount)) m = 0.5;
+              else if (cumulative >= Math.max(0, 66 - discount)) m = 0.48;
+              else if (cumulative >= Math.max(0, 56 - discount)) m = 0.46;
+              else if (cumulative >= Math.max(0, 46 - discount)) m = 0.42;
+              else m = 0.4;
+            }
+            classPay += X * m; 
+          } else if (empType === 'formalB') {
+             let m = 0;
+             if (cumulative > Math.max(0, 25 - discount)) {
+                if (cumulative >= Math.max(0, 76 - discount)) m = 0.46;
+                else if (cumulative >= Math.max(0, 66 - discount)) m = 0.44;
+                else if (cumulative >= Math.max(0, 56 - discount)) m = 0.42;
+                else if (cumulative >= Math.max(0, 46 - discount)) m = 0.38;
+                else if (cumulative >= Math.max(0, 36 - discount)) m = 0.36;
+                else m = 0.36; 
+             }
+             classPay += X * m;
           }
         }
     }
@@ -582,9 +572,15 @@ const App = () => {
          const mCust = customers.find(cust => cust.name?.trim().toLowerCase() === c.customerName?.trim().toLowerCase());
          const isAct = mCust?.customerType === 'activity' && !c.specialEventType; 
          const isNewAth = c.classDuration?.startsWith('athlete_') && c.classDuration !== 'athlete_buy';
+         const isOldAth = c.isAthleteProject && !isNewAth && c.classDuration !== 'athlete_buy';
          const cls = c.specialEventType ? (Number(c.classes) || 1) : (Number(c.classes) || 0);
          const isOvertimeLog = c.classDuration === 'overtime30min' || c.classDuration === 'overtime60min';
-         return s + (isAct || isOvertimeLog ? 0 : (isNewAth ? cls / 3 : cls));
+         
+         let vCls = cls;
+         if (isNewAth || isOldAth) vCls = 1;
+         if (isAct || isOvertimeLog) vCls = 0;
+         
+         return s + vCls;
       }, 0);
     });
     logs.forEach(log => {
@@ -810,8 +806,10 @@ const App = () => {
       
       const rawClasses = log.specialEventType ? (Number(log.classes) || 1) : (Number(log.classes) || 0);
       const classes = isActivityLog ? 0 : rawClasses;
-      let validClasses = isNewAthlete ? (classes / 3) : classes;
-      if(isOvertimeLog) validClasses = 0;
+      
+      let validClasses = classes;
+      if (isAthlete) validClasses = 1;
+      if (isOvertimeLog) validClasses = 0;
       
       const s10Qty = Number(log.sales10) || 0;
       const s5Qty = Number(log.sales5) || 0;
@@ -1040,20 +1038,20 @@ const App = () => {
   const currentBalance = payerToShow ? Number(payerToShow.remaining) : 0;
   const finalBalance = currentBalance + addingClasses - deductingClasses;
 
+  const activeDetailCoach = selectedCoachForDetails || (activeTab === 'my_summary' ? employees.find(e => e.id === loggedInCoachId) : null);
+
   const coachLogsForModal = useMemo(() => {
-    if (!selectedCoachForDetails) return [];
+    if (!activeDetailCoach) return [];
     const mLogs = dailyLogs.filter(l => l.date && l.date.startsWith(summaryMonth)).sort((a, b) => a.date.localeCompare(b.date) || (a.createdAt || '').localeCompare(b.createdAt || ''));
     let cumulative = 0;
-    let seqCount = 0; 
     const rows = [];
     mLogs.forEach(log => {
-      let isOwn = log.employeeId === selectedCoachForDetails.id;
-      let isSource = log.referralSourceId === selectedCoachForDetails.id && log.employeeId !== selectedCoachForDetails.id;
+      let isOwn = log.employeeId === activeDetailCoach.id;
+      let isSource = log.referralSourceId === activeDetailCoach.id && log.employeeId !== activeDetailCoach.id;
       if (isOwn || isSource) {
         let b = { total: 0, classPay: 0, bonus: 0, refAdj: 0, eventSupportPay: 0, validClasses: 0 };
         if (isOwn) {
-          b = calculateEntrySalary(selectedCoachForDetails, log, cumulative, 0);
-          cumulative += b.validClasses;
+          b = calculateEntrySalary(activeDetailCoach, log, cumulative, 0);
         }
         if (isSource) {
           const eligible = referralData[log.id]?.eligibleClasses || 0;
@@ -1067,15 +1065,17 @@ const App = () => {
 
         let currentSeq = null;
         if (isOwn && b.validClasses > 0) {
-           seqCount++;
-           currentSeq = seqCount;
+           const startSeq = cumulative + 1;
+           const endSeq = cumulative + b.validClasses;
+           currentSeq = startSeq === endSeq ? `${startSeq}` : `${startSeq}-${endSeq}`;
+           cumulative += b.validClasses;
         }
 
         rows.push({ ...log, calc: b, isOwn, isSource, cumulativeAfter: cumulative, seqCount: currentSeq });
       }
     });
     return rows;
-  }, [selectedCoachForDetails, dailyLogs, summaryMonth, customers]);
+  }, [activeDetailCoach, dailyLogs, summaryMonth, customers, referralData]);
 
   const customerLogsForModal = useMemo(() => {
     if (!selectedCustomerForDetails) return [];
@@ -1087,20 +1087,28 @@ const App = () => {
     let seqCounter = 0;
     const processed = logs.map(log => {
       let currentSeq = null;
-      const effectiveClasses = log.specialEventType ? (Number(log.classes) || 1) : (Number(log.classes) || 0);
+      const isNewAthlete = log.classDuration?.startsWith('athlete_') && log.classDuration !== 'athlete_buy';
+      const isOldAthlete = log.isAthleteProject && !isNewAthlete && log.classDuration !== 'athlete_buy';
+      const isAthlete = isNewAthlete || isOldAthlete;
+      const rawClsCount = log.specialEventType ? (Number(log.classes) || 1) : (Number(log.classes) || 0);
+
+      let effectiveClasses = rawClsCount;
+      if (isAthlete) effectiveClasses = 1;
+
       if (effectiveClasses > 0) {
-          seqCounter++;
-          currentSeq = seqCounter;
+          const startSeq = seqCounter + 1;
+          seqCounter += effectiveClasses;
+          currentSeq = startSeq === seqCounter ? `${startSeq}` : `${startSeq}-${seqCounter}`;
       }
       return { ...log, seqCount: currentSeq };
     });
     return processed.reverse();
-  }, [dailyLogs, selectedCustomerForDetails]);
+  }, [dailyLogs, selectedCustomerForDetails, userRole, loggedInCoachId]);
 
-  const detailSettlement = selectedCoachForDetails ? calculateSettlement(selectedCoachForDetails.id, summaryMonth) : null;
+  const detailSettlement = activeDetailCoach ? calculateSettlement(activeDetailCoach.id, summaryMonth) : null;
 
   const coachRestDaysInfo = useMemo(() => {
-    if (!selectedCoachForDetails || !selectedCoachForDetails.type?.startsWith('formal')) return { count: 0, dates: [] };
+    if (!activeDetailCoach || !activeDetailCoach.type?.startsWith('formal')) return { count: 0, dates: [] };
     
     const [year, month] = summaryMonth.split('-').map(Number);
     const daysInMonth = new Date(year, month, 0).getDate();
@@ -1117,7 +1125,7 @@ const App = () => {
 
     const restDates = allDates.filter(d => !workingDates.has(d));
     return { count: restDates.length, dates: restDates };
-  }, [selectedCoachForDetails, summaryMonth, coachLogsForModal]);
+  }, [activeDetailCoach, summaryMonth, coachLogsForModal]);
 
   const handleAddLog = async (e) => {
     e.preventDefault();
@@ -1745,6 +1753,8 @@ const App = () => {
         clockInTime: timeString,
         clockOutTime: null,
         workMinutes: 0,
+        type: 'normal',
+        status: 'approved',
         createdAt: now.toISOString()
       });
     });
@@ -1766,6 +1776,41 @@ const App = () => {
         clockOutTime: timeString,
         workMinutes: diffMins,
         updatedAt: now.toISOString()
+      });
+    });
+  };
+
+  const handleApplyMakeup = async (e) => {
+    e.preventDefault();
+    if (!loggedInCoachId || !makeupData.date || !makeupData.clockInTime || !makeupData.clockOutTime) return;
+    
+    const [inH, inM] = makeupData.clockInTime.split(':').map(Number);
+    const [outH, outM] = makeupData.clockOutTime.split(':').map(Number);
+    let diffMins = (outH * 60 + outM) - (inH * 60 + inM);
+    if (diffMins < 0) diffMins += 24 * 60;
+
+    triggerSync(async () => {
+        await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'attendance'), {
+            employeeId: loggedInCoachId,
+            date: makeupData.date,
+            clockInTime: makeupData.clockInTime,
+            clockOutTime: makeupData.clockOutTime,
+            workMinutes: diffMins,
+            type: 'makeup',
+            status: 'pending',
+            reason: makeupData.reason,
+            createdAt: new Date().toISOString()
+        });
+        setMakeupData({ date: getLocalDateString(), clockInTime: '', clockOutTime: '', reason: '' });
+        alert("補打卡申請已送出！等待主管審核。");
+    });
+  };
+
+  const handleMakeupApproval = async (recordId, newStatus) => {
+    triggerSync(async () => {
+      await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'attendance', recordId), {
+        status: newStatus,
+        updatedAt: new Date().toISOString()
       });
     });
   };
@@ -2021,6 +2066,7 @@ const App = () => {
               { id: 'special', label: '特別活動', icon: <Gift size={16}/> }, 
               { id: 'expenses', label: '請款報帳', icon: <Receipt size={16}/> }, 
               ...(userRole === 'boss' ? [{ id: 'summary', label: '月結表', icon: <TrendingUp size={16}/> }] : []), 
+              ...(userRole === 'coach' ? [{ id: 'my_summary', label: '我的明細', icon: <FileSpreadsheet size={16}/> }] : []), 
               { id: 'customers', label: '客人資料庫', icon: <Contact size={16}/> }, 
               ...(userRole === 'boss' ? [
                 { id: 'employees', label: '教練管理', icon: <Users size={16}/> },
@@ -2135,6 +2181,31 @@ const App = () => {
                                  </div>
                                </div>
                              )}
+
+                             <div className="mt-8 border-t border-slate-200 pt-8 w-full text-left">
+                                <h3 className="text-lg tracking-tighter text-slate-800 mb-4 flex items-center gap-2"><Clock size={18} className="text-amber-500"/> 忘記打卡？補打卡申請</h3>
+                                <form onSubmit={handleApplyMakeup} className="space-y-4">
+                                   <div className="grid grid-cols-3 gap-2">
+                                      <input type="date" required className="bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs font-mono" value={makeupData.date} onChange={e => setMakeupData({...makeupData, date: e.target.value})} />
+                                      <input type="time" required className="bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs font-mono" value={makeupData.clockInTime} onChange={e => setMakeupData({...makeupData, clockInTime: e.target.value})} title="上班時間" />
+                                      <input type="time" required className="bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs font-mono" value={makeupData.clockOutTime} onChange={e => setMakeupData({...makeupData, clockOutTime: e.target.value})} title="下班時間" />
+                                   </div>
+                                   <input type="text" required placeholder="請填寫補打卡原因 (必填)" className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs" value={makeupData.reason} onChange={e => setMakeupData({...makeupData, reason: e.target.value})} />
+                                   <button type="submit" className="w-full bg-amber-500 text-white py-3 rounded-xl font-black text-sm shadow-md hover:bg-amber-600 transition active:scale-95">送出補打卡申請</button>
+                                </form>
+                                <div className="mt-4 space-y-2 max-h-[150px] overflow-y-auto">
+                                   {attendanceRecords.filter(r => r.employeeId === loggedInCoachId && r.type === 'makeup').sort((a,b)=>b.createdAt.localeCompare(a.createdAt)).map(r => (
+                                      <div key={r.id} className="flex justify-between items-center text-xs p-3 bg-slate-50 rounded-xl border border-slate-100 shadow-sm">
+                                         <div className="flex flex-col">
+                                            <span className="font-mono text-slate-500">{r.date} {r.clockInTime}-{r.clockOutTime}</span>
+                                            <span className="text-slate-400">原因: {r.reason}</span>
+                                         </div>
+                                         <span className={`font-black ${r.status === 'approved' ? 'text-emerald-600' : r.status === 'rejected' ? 'text-rose-500' : 'text-amber-500'}`}>{r.status === 'approved' ? '已核准' : r.status === 'rejected' ? '被退回' : '審核中'}</span>
+                                      </div>
+                                   ))}
+                                </div>
+                             </div>
+
                           </div>
                         );
                      })()}
@@ -2385,7 +2456,7 @@ const App = () => {
                           </thead>
                           <tbody className="divide-y divide-slate-100 text-sm text-slate-700">
                              {(() => {
-                                const filtered = attendanceRecords.filter(r => r.date?.startsWith(logQueryMonth));
+                                const filtered = attendanceRecords.filter(r => r.date?.startsWith(logQueryMonth) && r.status !== 'pending' && r.status !== 'rejected');
                                 if (filtered.length === 0) {
                                   return <tr><td colSpan="4" className="p-10 text-center text-slate-400">這個月目前尚無任何打卡紀錄。</td></tr>;
                                 }
@@ -2436,6 +2507,53 @@ const App = () => {
                           </tbody>
                         </table>
                      </div>
+                  </div>
+
+                  <div className="bg-white p-10 rounded-[3rem] shadow-xl border border-slate-200 min-h-[400px]">
+                    <div className="flex justify-between items-center mb-8 border-b border-slate-100 pb-6">
+                       <h2 className="text-3xl text-slate-800 flex items-center gap-4 tracking-tighter"><Clock className="text-amber-500" size={32} /> 補打卡簽核管理</h2>
+                    </div>
+                    <div className="space-y-4 max-h-[400px] overflow-y-auto pr-2">
+                       {attendanceRecords.filter(r => r.type === 'makeup').sort((a,b) => b.createdAt.localeCompare(a.createdAt)).map(record => {
+                         const emp = employees.find(e => e.id === record.employeeId);
+                         if (!emp) return null;
+                         return (
+                           <div key={record.id} className={`p-5 rounded-3xl border flex flex-col md:flex-row md:items-center justify-between gap-4 transition-all ${record.status === 'pending' ? 'bg-amber-50/30 border-amber-200 shadow-sm' : 'bg-slate-50 border-slate-100'}`}>
+                             <div className="flex gap-4 items-start">
+                               <div className="w-12 h-12 rounded-xl bg-slate-200 flex items-center justify-center text-xl font-black shrink-0">{emp.name[0]}</div>
+                               <div>
+                                 <div className="flex items-center gap-2 mb-1">
+                                   <span className="text-lg font-black text-slate-800">{emp.name}</span>
+                                   <span className="text-[10px] bg-amber-100 text-amber-700 px-2 py-0.5 rounded border border-amber-200">補打卡申請</span>
+                                 </div>
+                                 <div className="text-sm font-mono text-slate-500 mb-1 flex gap-2 items-center">
+                                    <span className="font-black text-indigo-600">{record.date}</span> 
+                                    <span className="bg-slate-200 px-2 py-0.5 rounded">{record.clockInTime} - {record.clockOutTime}</span>
+                                    <span className="text-xs">({Math.floor(record.workMinutes/60)}h {record.workMinutes%60}m)</span>
+                                 </div>
+                                 <p className="text-xs text-slate-500 italic">原因：{record.reason || '未填寫'}</p>
+                               </div>
+                             </div>
+                             
+                             <div className="flex gap-2 justify-end shrink-0">
+                               {record.status === 'pending' ? (
+                                  <>
+                                    <button onClick={() => handleMakeupApproval(record.id, 'rejected')} className="px-4 py-2 bg-rose-50 text-rose-600 rounded-xl font-black text-xs hover:bg-rose-100 flex items-center gap-1 border border-rose-200"><XSquare size={14}/> 退回</button>
+                                    <button onClick={() => handleMakeupApproval(record.id, 'approved')} className="px-4 py-2 bg-emerald-500 text-white rounded-xl font-black text-xs shadow-md hover:bg-emerald-600 flex items-center gap-1"><CheckSquare size={14}/> 核准</button>
+                                  </>
+                               ) : (
+                                  <span className={`px-4 py-2 rounded-xl text-xs font-black border ${record.status === 'approved' ? 'bg-emerald-50 text-emerald-600 border-emerald-200' : 'bg-rose-50 text-rose-600 border-rose-200'}`}>
+                                     {record.status === 'approved' ? '已核准 (併入工時)' : '已退回'}
+                                  </span>
+                               )}
+                             </div>
+                           </div>
+                         )
+                       })}
+                       {attendanceRecords.filter(r => r.type === 'makeup').length === 0 && (
+                          <div className="text-center p-10 text-slate-400">目前沒有任何補打卡申請。</div>
+                       )}
+                    </div>
                   </div>
 
                   <div className="bg-white p-10 rounded-[3rem] shadow-xl border border-slate-200 min-h-[600px]">
@@ -3009,9 +3127,15 @@ const App = () => {
                              const lCust = customers.find(cust => cust.name?.trim().toLowerCase() === c.customerName?.trim().toLowerCase());
                              const isAct = lCust?.customerType === 'activity' && !c.specialEventType;
                              const isNewAth = c.classDuration?.startsWith('athlete_') && c.classDuration !== 'athlete_buy';
+                             const isOldAth = c.isAthleteProject && !isNewAth && c.classDuration !== 'athlete_buy';
                              const rawCls = c.specialEventType ? (Number(c.classes) || 1) : (Number(c.classes) || 0);
                              const isOvertimeLog = c.classDuration === 'overtime30min' || c.classDuration === 'overtime60min';
-                             return s + (isAct || isOvertimeLog ? 0 : (isNewAth ? rawCls / 3 : rawCls));
+                             
+                             let vCls = rawCls;
+                             if (isNewAth || isOldAth) vCls = 1;
+                             if (isAct || isOvertimeLog) vCls = 0;
+
+                             return s + vCls;
                           }, 0)) : { total: 0 };
                           
                           const payer = customers.find(c => c.id === log.deductFromCustomerId);
@@ -3145,6 +3269,145 @@ const App = () => {
                 </tbody>
               </table>
             </div>
+          </div>
+        )}
+
+        {activeTab === 'my_summary' && userRole === 'coach' && activeDetailCoach && (
+          <div className="bg-white rounded-[3.5rem] w-full max-w-5xl mx-auto shadow-2xl relative border border-slate-200 font-sans overflow-hidden animate-in zoom-in duration-200">
+             <div className="p-8 border-b border-slate-100 flex justify-between items-center bg-slate-50 shrink-0 flex-wrap gap-4">
+                <h3 className="text-3xl font-black flex items-center gap-4 text-indigo-600 uppercase tracking-widest">
+                  <FileSpreadsheet size={32} /> {activeDetailCoach.name} - 課堂與薪資明細
+                </h3>
+                <div className="flex gap-3 items-center">
+                  <div className="flex items-center gap-2 bg-indigo-100 px-4 py-2 rounded-xl text-indigo-700 font-mono shadow-inner border border-indigo-200"><Calendar size={16} /><input type="month" className="bg-transparent border-none outline-none font-black text-indigo-900" value={summaryMonth} onChange={(e) => setSummaryMonth(e.target.value)} /></div>
+                  <button onClick={() => setShowPayslipModal(true)} className="flex items-center gap-2 bg-indigo-600 text-white px-5 py-2.5 rounded-xl text-sm font-black shadow-md hover:bg-indigo-700 active:scale-95 transition-all">
+                    <FileSpreadsheet size={16} /> 數位薪資單
+                  </button>
+                  <button onClick={handleExportCoachPayslip} className="flex items-center gap-2 bg-emerald-600 text-white px-5 py-2.5 rounded-xl text-sm font-black shadow-md hover:bg-emerald-700 active:scale-95 transition-all">
+                    <Download size={16} /> 匯出 CSV
+                  </button>
+                </div>
+             </div>
+             <div className="p-0 flex-1 bg-white">
+               <table className="w-full text-left whitespace-nowrap text-xs md:text-sm">
+                 <thead className="bg-slate-100 text-[10px] text-slate-500 uppercase tracking-widest sticky top-0 shadow-sm z-10">
+                   <tr>
+                     <th className="px-5 py-5 text-center">序號</th>
+                     <th className="px-5 py-5 text-center">日期</th>
+                     <th className="px-5 py-5">學員/來源</th>
+                     <th className="px-5 py-5">課程/項目</th>
+                     <th className="px-5 py-5 text-center">扣點/堂數</th>
+                     <th className="px-5 py-5 text-right text-indigo-500">課費</th>
+                     <th className="px-5 py-5 text-right text-amber-500">推銷獎金</th>
+                     <th className="px-5 py-5 text-right text-sky-500">不固定薪資</th>
+                     <th className="px-6 py-5 text-right text-emerald-600 font-black">單筆合計</th>
+                   </tr>
+                 </thead>
+                 <tbody className="divide-y divide-slate-100">
+                   {coachLogsForModal.map((row) => (
+                      <tr key={row.id} className="hover:bg-slate-50 transition-colors text-slate-700 font-black">
+                        <td className="px-5 py-5 text-center font-mono text-slate-500">
+                          {row.seqCount ? `#${row.seqCount}` : '-'}
+                        </td>
+                        <td className="px-5 py-5 text-center font-mono text-slate-500">
+                          {row.date?.slice(5)}
+                        </td>
+                        <td className="px-5 py-5">
+                          <div className="font-black text-slate-800 text-sm">
+                            {row.customerName}
+                          </div>
+                          {!row.isOwn && <div className="text-[9px] text-sky-500 border border-sky-200 bg-sky-50 px-1 rounded w-fit mt-1">來自轉介抽成</div>}
+                        </td>
+                        <td className="px-5 py-5">
+                          <div className="text-sm font-black text-slate-700 flex flex-col gap-1">
+                            {row.specialEventType ? row.specialEventType :
+                             row.classDuration === 'athlete_buy' ? '運動員儲值' :
+                             row.classDuration?.startsWith('athlete_') ? `運動員專案 (${row.classDuration.split('_')[1]})` :
+                             row.classDuration === 'overtime30min' ? '加時 30 min (歷史)' :
+                             row.classDuration === 'overtime60min' ? '加時 60 min (歷史)' :
+                             `一般課程 (${row.classDuration})`}
+                            {Number(row.sales10) > 0 && <span className="text-[9px] text-indigo-500 bg-indigo-50 px-1 rounded border border-indigo-100 font-sans w-fit">10+1組 x{row.sales10}</span>}
+                            {Number(row.sales5) > 0 && <span className="text-[9px] text-indigo-500 bg-indigo-50 px-1 rounded border border-indigo-100 font-sans w-fit">5堂組 x{row.sales5}</span>}
+                            {Number(row.salesAthlete) > 0 && <span className="text-[9px] text-amber-600 bg-amber-50 px-1 rounded border border-amber-200 font-sans w-fit">運動員包 x{row.salesAthlete} {row.purchaseDate && `(${row.purchaseDate.slice(5)})`}</span>}
+                          </div>
+                        </td>
+                        <td className="px-5 py-5 text-center font-mono">
+                          {row.isOwn ? (
+                              row.specialEventType ?
+                              <span className={`text-sm font-black ${row.specialEventType.startsWith('出差任務') ? 'text-amber-600' : 'text-fuchsia-600'}`}>{row.specialEventType.startsWith('出差任務') ? `${row.classes} 堂(差)` : '1 堂(特)'}</span> :
+                              row.classDuration === 'athlete_buy' ?
+                              <span className="text-sm font-black text-amber-600">儲值</span> :
+                              row.classDuration?.startsWith('athlete_') ? 
+                              <span className="text-sm font-black text-amber-600">-{row.classes} 點</span> :
+                              (row.classDuration === 'overtime30min' || row.classDuration === 'overtime60min') ?
+                              <span className="text-sm font-black text-rose-500">不計堂</span> :
+                              <span className="text-sm font-black text-indigo-600">{row.classes} 堂</span>
+                          ) : <span className="text-slate-300">-</span>}
+                        </td>
+                        <td className="px-5 py-5 text-right font-mono text-indigo-500">
+                          {row.calc.classPay > 0 ? `$${row.calc.classPay.toLocaleString()}` : '-'}
+                        </td>
+                        <td className="px-5 py-5 text-right font-mono text-amber-500">
+                          {row.calc.bonus > 0 ? `$${row.calc.bonus.toLocaleString()}` : '-'}
+                        </td>
+                        <td className="px-5 py-5 text-right font-mono text-sky-500">
+                          {row.calc.eventSupportPay > 0 ? `$${row.calc.eventSupportPay.toLocaleString()}` : '-'}
+                        </td>
+                        <td className="px-6 py-5 text-right font-mono text-emerald-600 font-black text-lg">
+                          ${row.calc.total.toLocaleString()}
+                        </td>
+                      </tr>
+                   ))}
+                   {coachLogsForModal.length === 0 && (
+                      <tr><td colSpan="9" className="text-center py-12 text-slate-400">本月無任何課堂明細紀錄。</td></tr>
+                   )}
+                 </tbody>
+               </table>
+             </div>
+             <div className="p-8 border-t border-slate-100 bg-slate-50 flex justify-between items-center shrink-0 flex-wrap gap-4">
+                <div className="flex items-center gap-8">
+                  <div className="flex flex-col">
+                    <span className="text-[10px] text-slate-400 uppercase tracking-widest mb-1">本月累計</span>
+                    <span className="text-xl text-slate-700 font-mono">{formatClasses(detailSettlement?.totalClasses)} <span className="text-sm font-sans tracking-tighter">標準堂</span></span>
+                  </div>
+                  {activeDetailCoach?.type?.startsWith('formal') && (
+                    <div className="flex flex-col max-w-[200px] md:max-w-xs border-l border-slate-200 pl-8">
+                      <span className="text-[10px] text-sky-500 uppercase tracking-widest mb-1">全天無課/休假 ({coachRestDaysInfo.count}天)</span>
+                      <span className="text-xs text-slate-500 font-mono truncate" title={coachRestDaysInfo.dates.map(d => parseInt(d.slice(8), 10)).join(', ')}>
+                        {coachRestDaysInfo.count > 0 ? coachRestDaysInfo.dates.map(d => parseInt(d.slice(8), 10)).join(', ') : '無休假'}
+                      </span>
+                    </div>
+                  )}
+                  {activeDetailCoach?.type?.startsWith('formal') && (() => {
+                      let coachSeniorityYearsModal = 0;
+                      if (activeDetailCoach?.startDate) {
+                          const [sy, sm, sd] = activeDetailCoach.startDate.split('-').map(Number);
+                          const [ly, lm] = summaryMonth.split('-').map(Number);
+                          const start = new Date(sy, sm - 1, sd);
+                          const current = new Date(ly, lm - 1, 1);
+                          coachSeniorityYearsModal = current.getFullYear() - start.getFullYear();
+                          if (current < new Date(current.getFullYear(), start.getMonth(), start.getDate())) {
+                              coachSeniorityYearsModal--;
+                          }
+                          coachSeniorityYearsModal = Math.max(0, coachSeniorityYearsModal);
+                      }
+                      const baseTargetModal = activeDetailCoach?.type === 'formalA' || activeDetailCoach?.type === 'formal' ? Math.max(0, 35 - coachSeniorityYearsModal) : (activeDetailCoach?.type === 'formalB' ? Math.max(0, 25 - coachSeniorityYearsModal) : null);
+                      
+                      return baseTargetModal !== null ? (
+                        <div className="flex flex-col max-w-[200px] md:max-w-xs border-l border-slate-200 pl-8">
+                          <span className="text-[10px] text-amber-600 uppercase tracking-widest mb-1 flex items-center gap-1"><BadgePercent size={12}/> 年資成就 ({coachSeniorityYearsModal}年)</span>
+                          <span className="text-xs text-slate-700 font-black">
+                            基本門檻降至 <span className="text-base text-amber-600 font-mono">{baseTargetModal}</span> 堂
+                          </span>
+                        </div>
+                      ) : null;
+                  })()}
+                </div>
+                <div className="flex flex-col items-end w-full md:w-auto">
+                  <span className="text-[10px] text-emerald-600/70 uppercase tracking-widest mb-1">估計實領總計</span>
+                  <span className="text-4xl font-black text-emerald-600 font-mono tracking-tighter">${detailSettlement?.grossSalary.toLocaleString()}</span>
+                </div>
+             </div>
           </div>
         )}
 
@@ -4271,118 +4534,8 @@ const App = () => {
           </div>
         )}
 
-        {selectedCustomerForDetails && (
-            <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4 md:p-8 font-black">
-              <div className="bg-white rounded-[3.5rem] w-full max-w-5xl max-h-full flex flex-col shadow-2xl relative border border-slate-200 font-sans overflow-hidden animate-in zoom-in duration-200">
-                 <div className="p-8 border-b border-slate-100 flex justify-between items-center bg-slate-50 shrink-0">
-                    <h3 className="text-3xl font-black flex items-center gap-4 text-amber-600 uppercase tracking-widest">
-                      <History size={32} /> {selectedCustomerForDetails.name} - 歷史消費與上課明細
-                    </h3>
-                    <button onClick={() => setSelectedCustomerForDetails(null)} className="text-slate-400 hover:text-slate-900 transition-all font-black bg-white p-2 rounded-full shadow-sm border border-slate-200"><X size={24} /></button>
-                 </div>
-                 <div className="overflow-y-auto p-0 flex-1 bg-white">
-                    <table className="w-full text-left whitespace-nowrap text-xs md:text-sm">
-                      <thead className="bg-slate-100 text-[10px] text-slate-500 uppercase tracking-widest sticky top-0 shadow-sm z-10">
-                        <tr>
-                          <th className="px-8 py-5">序號 / 日期</th>
-                          <th className="px-6 py-5">教練 / 營收項目</th>
-                          <th className="px-6 py-5 text-center">堂數 / 時長</th>
-                          <th className="px-6 py-5 text-center">付款方式</th>
-                          <th className="px-6 py-5 text-right text-emerald-600">實收金額</th>
-                          <th className="px-8 py-5 text-right">操作</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-100">
-                        {customerLogsForModal.map((log) => {
-                           const coach = employees.find(e => e.id === log.employeeId);
-                           const isActivityLog = selectedCustomerForDetails.customerType === 'activity' && !log.specialEventType;
-                           
-                           let classCashRev = 0;
-                           if (log.specialEventType === '隨喜40min') {
-                               classCashRev = Number(log.companyRevenue) || 0;
-                           } else if (log.specialEventType === '進階體驗90min') {
-                               classCashRev = 1000;
-                           } else if (log.specialEventType?.startsWith('出差任務')) {
-                               classCashRev = Number(log.companyRevenue) || 0;
-                           } else if (log.employeeId === 'COMPANY_REVENUE' || isActivityLog) {
-                               classCashRev = Number(log.companyRevenue) || 0;
-                           } else if (log.paymentMethod !== '代扣' && Number(log.classes) > 0) {
-                               const isNewAth = log.classDuration?.startsWith('athlete_') && log.classDuration !== 'athlete_buy';
-                               const isOldAth = log.isAthleteProject && !isNewAth && log.classDuration !== 'athlete_buy';
-                               if (isNewAth) {
-                                   classCashRev = Number(log.classes) * 250;
-                               } else if (isOldAth) {
-                                   classCashRev = Number(log.classes) * 750;
-                               } else {
-                                   const X = log.classFee ? Number(log.classFee) : (
-                                       log.classDuration === '150min' ? 4300 :
-                                       log.classDuration === '120min' ? 3400 :
-                                       log.classDuration === '60min' || log.classDuration === 'overtime60min' ? 1800 : 
-                                       log.classDuration === 'overtime30min' ? 900 : 2500
-                                   );
-                                   classCashRev = Number(log.classes) * X;
-                               }
-                           }
-                           const revenue = classCashRev + (Number(log.sales10) * 25000) + (Number(log.sales5) * 11500) + (Number(log.salesAthlete) * 6000) + ((Number(log.productPrice) || 0) * (Number(log.productQty) || 0));
-
-                           return (
-                             <tr key={log.id} className="hover:bg-slate-50 transition-colors text-slate-700">
-                               <td className="px-8 py-5 font-mono text-slate-500">
-                                 {log.seqCount && <span className="text-slate-300 mr-2 font-black">#{log.seqCount}</span>}
-                                 {log.date?.slice(5)}
-                               </td>
-                               <td className="px-6 py-5">
-                                 <div className="font-black text-slate-800 text-base flex items-center gap-2">
-                                   {log.employeeId === 'COMPANY_REVENUE' ? '🏢 公司活動收入' : (coach?.name || '未知教練')}
-                                   {log.referralSourceId && log.referralSourceId !== log.employeeId && referralData[log.id] && (
-                                     <span className={`text-[9px] px-1.5 py-0.5 rounded border font-black uppercase tracking-widest whitespace-nowrap ${referralData[log.id].eligibleClasses > 0 ? 'bg-amber-100 text-amber-700 border-amber-400' : 'bg-slate-100 text-slate-500 border-slate-200'}`}>
-                                       {referralData[log.id].eligibleClasses > 0 ? `🤝 轉介紀錄 (${referralData[log.id].seqString})` : `⛔ 轉介已滿10堂`}
-                                     </span>
-                                   )}
-                                 </div>
-                               </td>
-                               <td className="px-6 py-5 text-center font-mono">
-                                 {isActivityLog ? <span className="text-slate-300">-</span> : (
-                                   log.specialEventType ?
-                                     <span className={`text-lg font-black ${log.specialEventType.startsWith('出差任務') ? 'text-amber-600' : 'text-fuchsia-600'}`}>{log.specialEventType.startsWith('出差任務') ? `${log.classes} 堂(差)` : '特(1堂)'}</span> :
-                                   log.classDuration === 'athlete_buy' ?
-                                     <span className="text-lg font-black text-amber-600">儲值</span> :
-                                   log.classDuration?.startsWith('athlete_') ? 
-                                     <span className="text-lg font-black text-amber-600">-{log.classes} 點</span> : 
-                                     <span className="text-lg font-black text-indigo-600">{log.classes} 堂</span>
-                                 )}
-                                 <div className="text-[10px] text-slate-400 mt-1">
-                                   {log.classDuration === 'athlete_buy' ? '--:--' : (log.specialEventType ? log.specialEventType : (log.classDuration?.startsWith('athlete_') ? log.classDuration.split('_')[1] + 'm' : (log.classDuration === '150min' ? '150m' : log.classDuration === '120min' ? '120m' : log.classDuration === 'overtime30min' ? '加時30m (歷史)' : log.classDuration === 'overtime60min' ? '加時60m (歷史)' : log.classDuration)))} / {log.sessionTime || '--:--'}
-                                 </div>
-                                 {(Number(log.sales10) > 0 || Number(log.sales5) > 0) && <div className="text-[9px] text-indigo-600 bg-indigo-50 border border-indigo-100 rounded px-1 mt-1 w-fit mx-auto font-sans">買課包</div>}
-                                 {Number(log.salesAthlete) > 0 && <div className="text-[9px] text-amber-600 bg-amber-50 border border-amber-100 rounded px-1 mt-1 w-fit mx-auto font-sans">買運動員包 {log.purchaseDate && `(${log.purchaseDate.slice(5)})`}</div>}
-                                 {(Number(log.productQty) > 0 && log.productName) && <div className="text-[9px] text-teal-600 bg-teal-50 border border-teal-100 rounded px-1 mt-1 w-fit mx-auto font-sans">買商品</div>}
-                               </td>
-                               <td className="px-6 py-5 text-center">
-                                 <span className={`px-2 py-0.5 rounded border text-[10px] ${log.paymentMethod === '轉帳' ? 'text-blue-600 bg-blue-50 border-blue-100' : log.paymentMethod === '代扣' ? 'text-emerald-600 bg-emerald-50 border-emerald-100' : 'text-amber-600 bg-amber-50 border-amber-100'}`}>[{log.paymentMethod}]</span>
-                               </td>
-                               <td className="px-6 py-5 text-right font-mono text-emerald-600 font-black text-xl">
-                                 ${revenue.toLocaleString()}
-                               </td>
-                               <td className="px-8 py-5 text-right">
-                                 <button onClick={() => setEditingLog(log)} className="p-2 text-slate-300 hover:text-amber-600 transition-colors"><Edit2 size={16} /></button>
-                                 <button onClick={() => triggerDeleteLog(log)} className="p-2 text-slate-200 hover:text-rose-500 transition-colors"><Trash2 size={16} /></button>
-                               </td>
-                             </tr>
-                           );
-                        })}
-                        {customerLogsForModal.length === 0 && (
-                           <tr><td colSpan="6" className="text-center py-12 text-slate-400">目前尚無任何消費或上課紀錄。</td></tr>
-                        )}
-                      </tbody>
-                    </table>
-                 </div>
-              </div>
-            </div>
-          )}
-
-        {showPayslipModal && selectedCoachForDetails && detailSettlement && (() => {
-            const isCompany = customIsCompany[selectedCoachForDetails.id] || false;
+        {showPayslipModal && activeDetailCoach && detailSettlement && (() => {
+            const isCompany = customIsCompany[activeDetailCoach.id] || false;
             const origBase = detailSettlement.originalBaseSalary || 0;
             
             // 精準回推各項收入
@@ -4422,8 +4575,8 @@ const App = () => {
 
             let tenureString = "未填寫入職日";
             let formattedStartDate = "-";
-            if (selectedCoachForDetails.startDate) {
-                const start = new Date(selectedCoachForDetails.startDate);
+            if (activeDetailCoach.startDate) {
+                const start = new Date(activeDetailCoach.startDate);
                 const now = new Date(summaryMonth + '-01');
                 let years = now.getFullYear() - start.getFullYear();
                 let months = now.getMonth() - start.getMonth();
@@ -4436,14 +4589,14 @@ const App = () => {
             }
 
             const empLeavesTotalHours = leaveRecords
-                .filter(l => l.employeeId === selectedCoachForDetails.id && l.date.startsWith(summaryMonth) && l.status === 'approved')
+                .filter(l => l.employeeId === activeDetailCoach.id && l.date.startsWith(summaryMonth) && l.status === 'approved')
                 .reduce((sum, l) => sum + Number(l.hours), 0);
 
             const today = new Date();
 
             const handleSharePayslip = () => {
                 const text = `【築動運動防護 - 薪資明細】
-員工：${selectedCoachForDetails.name}
+員工：${activeDetailCoach.name}
 計薪月份：${summaryMonth}
 
 一、應發項目 (合計 $${totalEarnings.toLocaleString()})
@@ -4475,7 +4628,7 @@ ${leaveDed > 0 ? `- 請假缺勤扣除：$${leaveDed.toLocaleString()}\n` : ''}
 
                 if (navigator.share) {
                     navigator.share({
-                        title: `${selectedCoachForDetails.name} - ${summaryMonth} 薪資明細`,
+                        title: `${activeDetailCoach.name} - ${summaryMonth} 薪資明細`,
                         text: text
                     }).catch(err => {
                         navigator.clipboard.writeText(text);
@@ -4503,9 +4656,9 @@ ${leaveDed > 0 ? `- 請假缺勤扣除：$${leaveDed.toLocaleString()}\n` : ''}
                                    const newOtherDed = prompt("請輸入【其他保費(扣除)】金額：", detailSettlement.otherDeduction);
                                    
                                    if (newProf !== null) {
-                                      const docId = `${selectedCoachForDetails.id}_${summaryMonth}`;
+                                      const docId = `${activeDetailCoach.id}_${summaryMonth}`;
                                       setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'salary_adjustments', docId), {
-                                         employeeId: selectedCoachForDetails.id,
+                                         employeeId: activeDetailCoach.id,
                                          month: summaryMonth,
                                          professionalAllowance: Number(newProf) || 0,
                                          projectBonus: Number(newProj) || 0,
@@ -4551,8 +4704,8 @@ ${leaveDed > 0 ? `- 請假缺勤扣除：$${leaveDed.toLocaleString()}\n` : ''}
                             {/* 員工基本資料 */}
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 md:gap-16 mb-6 bg-blue-50/50 p-5 font-bold text-sm text-slate-700 border border-blue-100">
                                 <div className="space-y-3">
-                                    <div className="flex"><span className="w-24 md:w-32 text-slate-500 tracking-widest">員工姓名：</span><span className="text-slate-900 text-lg leading-none">{selectedCoachForDetails.name}</span></div>
-                                    <div className="flex"><span className="w-24 md:w-32 text-slate-500 tracking-widest">職　　稱：</span><span className="text-slate-900">{detailSettlement.typeLabel} {selectedCoachForDetails.isBossNoPay ? '(負責人)' : ''}</span></div>
+                                    <div className="flex"><span className="w-24 md:w-32 text-slate-500 tracking-widest">員工姓名：</span><span className="text-slate-900 text-lg leading-none">{activeDetailCoach.name}</span></div>
+                                    <div className="flex"><span className="w-24 md:w-32 text-slate-500 tracking-widest">職　　稱：</span><span className="text-slate-900">{detailSettlement.typeLabel} {activeDetailCoach.isBossNoPay ? '(負責人)' : ''}</span></div>
                                 </div>
                                 <div className="space-y-3">
                                     <div className="flex"><span className="w-24 md:w-32 text-slate-500 tracking-widest">到 職 日：</span><span className="text-slate-900 font-mono text-base">{formattedStartDate}</span></div>
