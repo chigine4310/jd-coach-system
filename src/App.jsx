@@ -29,7 +29,7 @@ import {
   TrendingUp, Contact, Users, Wallet, Check, CalendarDays, Edit2, Trash2, 
   FileJson, DollarSign, Save, X, Cloud, CheckCircle2,
   Timer, LogIn, LogOut, CalendarOff, CheckSquare, XSquare, Receipt,
-  ChevronLeft, ChevronRight, CalendarCheck
+  ChevronLeft, ChevronRight, CalendarCheck, ListTodo, MessageSquarePlus, Send, CheckCircle
 } from 'lucide-react';
 
 const firebaseConfig = {
@@ -41,6 +41,7 @@ const firebaseConfig = {
   appId: import.meta.env.VITE_FIREBASE_APP_ID,
   measurementId: import.meta.env.VITE_FIREBASE_MEASUREMENT_ID
 };
+
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
@@ -174,6 +175,7 @@ const App = () => {
   const [expenses, setExpenses] = useState([]);
   const [monthlyAdjustments, setMonthlyAdjustments] = useState([]);
   const [inventoryData, setInventoryData] = useState([]);
+  const [tasks, setTasks] = useState([]);
   const [activeTab, setActiveTab] = useState('attendance');
   const [athleteMode, setAthleteMode] = useState('deduct'); 
   const [dailyOpMode, setDailyOpMode] = useState('deduct'); 
@@ -195,12 +197,17 @@ const App = () => {
   const [editingCustomer, setEditingCustomer] = useState(null);
   const [editingEmployee, setEditingEmployee] = useState(null);
   const [editingSalaryAdj, setEditingSalaryAdj] = useState(null);
+  const [editingTask, setEditingTask] = useState(null);
   const [confirmModal, setConfirmModal] = useState({ isOpen: false, type: 'danger', title: '', message: '', action: null });
   const [aiModal, setAiModal] = useState({ isOpen: false, title: '', content: '', isLoading: false });
   const [showPayslipModal, setShowPayslipModal] = useState(false);
   const [selectedCoachForDetails, setSelectedCoachForDetails] = useState(null);
   const [selectedCustomerForDetails, setSelectedCustomerForDetails] = useState(null);
   
+  const [taskFormData, setTaskFormData] = useState({ title: '', description: '', assigneeId: '', dueDate: getLocalDateString() });
+  const [taskFilter, setTaskFilter] = useState('todo'); // 'todo' | 'assigned_by_me' | 'completed'
+  const [replyInputs, setReplyInputs] = useState({});
+
   const [newEmp, setNewEmp] = useState({ name: '', xValue: '', type: 'formalA', isBossNoPay: false, baseSalary: '', startDate: getLocalDateString(), projectTitle: '', promotionDate: '', prePromotionType: '' });
   const [newCust, setNewCust] = useState({ 
     name: '', birthday: '', gender: '不透露', occupation: '', remaining: '0', 
@@ -344,6 +351,7 @@ const App = () => {
     const expRef = collection(db, 'artifacts', appId, 'public', 'data', 'expenses');
     const adjRef = collection(db, 'artifacts', appId, 'public', 'data', 'salary_adjustments');
     const invRef = collection(db, 'artifacts', appId, 'public', 'data', 'inventory');
+    const tasksRef = collection(db, 'artifacts', appId, 'public', 'data', 'tasks');
     
     let loadedCount = 0;
     const checkLoaded = () => { loadedCount++; if (loadedCount >= 3) setIsDataLoaded(true); };
@@ -356,8 +364,9 @@ const App = () => {
     const unsubExp = onSnapshot(expRef, (s) => { setExpenses(s.docs.map(d => ({ id: d.id, ...d.data() }))); }, (err) => console.error(err));
     const unsubAdj = onSnapshot(adjRef, (s) => { setMonthlyAdjustments(s.docs.map(d => ({ id: d.id, ...d.data() }))); }, (err) => console.error(err));
     const unsubInv = onSnapshot(invRef, (s) => { setInventoryData(s.docs.map(d => ({ id: d.id, ...d.data() }))); }, (err) => console.error(err));
+    const unsubTasks = onSnapshot(tasksRef, (s) => { setTasks(s.docs.map(d => ({ id: d.id, ...d.data() }))); }, (err) => console.error(err));
     
-    return () => { unsubEmp(); unsubLog(); unsubCust(); unsubAtt(); unsubLeave(); unsubExp(); unsubAdj(); unsubInv(); };
+    return () => { unsubEmp(); unsubLog(); unsubCust(); unsubAtt(); unsubLeave(); unsubExp(); unsubAdj(); unsubInv(); unsubTasks(); };
   }, [user]);
 
   useEffect(() => {
@@ -1214,80 +1223,74 @@ const App = () => {
     });
   };
 
-  const handleUpdateLog = async (e) => {
+  const handleCreateTask = async (e) => {
     e.preventDefault();
-    if (!editingLog) return;
+    const assignerId = userRole === 'boss' ? 'boss' : loggedInCoachId;
+    if (!taskFormData.title || !taskFormData.assigneeId) return;
+    
     triggerSync(async () => {
-      const editingCustomerObj = customers.find(c => c.name?.trim().toLowerCase() === editingLog.customerName?.trim().toLowerCase());
-      const isEditActivityCustomer = editingCustomerObj?.customerType === 'activity' && !editingLog.specialEventType;
-      const isCompanyRevenue = editingLog.employeeId === 'COMPANY_REVENUE';
+        await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'tasks'), {
+            title: taskFormData.title,
+            description: taskFormData.description,
+            assignerId: assignerId,
+            assigneeId: taskFormData.assigneeId,
+            dueDate: taskFormData.dueDate,
+            status: 'pending',
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString()
+        });
+        setTaskFormData({ title: '', description: '', assigneeId: '', dueDate: getLocalDateString() });
+        alert("交辦事項已發送！");
+    });
+  };
 
-      let updatedLog = {
-        ...editingLog,
-        classes: (isCompanyRevenue || isEditActivityCustomer) ? 0 : (editingLog.specialEventType ? (Number(editingLog.classes) || 1) : Number(editingLog.classes)),
-        companyRevenue: (isCompanyRevenue || isEditActivityCustomer || editingLog.specialEventType) ? (Number(editingLog.companyRevenue) || 0) : 0,
-        purchaseDate: editingLog.purchaseDate || editingLog.date,
-        updatedAt: new Date().toISOString()
+  const handleUpdateTaskStatus = async (taskId, newStatus) => {
+      triggerSync(async () => {
+          await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'tasks', taskId), {
+              status: newStatus,
+              updatedAt: new Date().toISOString()
+          });
+      });
+  };
+
+  const handleAddReply = async (taskId, text) => {
+      if (!text || !text.trim()) return;
+      const senderId = userRole === 'boss' ? 'boss' : loggedInCoachId;
+      const task = tasks.find(t => t.id === taskId);
+      if (!task) return;
+
+      const newReply = {
+          senderId,
+          text: text.trim(),
+          createdAt: new Date().toISOString()
       };
 
-      if (updatedLog.referralSourceId && updatedLog.referralSourceId !== updatedLog.employeeId && !isCompanyRevenue && !isEditActivityCustomer) {
-      } else if (!updatedLog.referralSourceId) {
-         updatedLog.referralReceiverId = '';
-      }
-
-      // 移除 UI 專用運算屬性與 undefined，避免 Firebase 阻擋寫入
-      const { calc, isOwn, isSource, cumulativeAfter, seqCount, id, ...logToSave } = updatedLog;
-      Object.keys(logToSave).forEach(key => logToSave[key] === undefined && delete logToSave[key]);
-
-      await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'logs', editingLog.id), logToSave);
-      setEditingLog(null);
-    });
+      triggerSync(async () => {
+          await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'tasks', taskId), {
+              replies: [...(task.replies || []), newReply],
+              updatedAt: new Date().toISOString()
+          });
+          setReplyInputs(prev => ({ ...prev, [taskId]: '' }));
+      });
   };
 
-  const handleUpdateCustomer = async (e) => {
-    e.preventDefault();
-    if (!editingCustomer || !editingCustomer.name?.trim()) {
-      alert("學員姓名不能為空");
-      return;
-    }
-    triggerSync(async () => { 
-      // 過濾 undefined 與內部 id 欄位
-      const { id, ...dataToSave } = editingCustomer;
-      Object.keys(dataToSave).forEach(key => dataToSave[key] === undefined && delete dataToSave[key]);
-
-      dataToSave.name = dataToSave.name.trim();
-      dataToSave.remaining = Number(dataToSave.remaining) || 0;
-
-      await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'customers', editingCustomer.id), { 
-        ...dataToSave, 
-        updatedAt: new Date().toISOString() 
-      }); 
-      setEditingCustomer(null); 
-    });
+  const handleUpdateTask = async (e) => {
+      e.preventDefault();
+      if (!editingTask) return;
+      triggerSync(async () => {
+          const { id, ...dataToSave } = editingTask;
+          Object.keys(dataToSave).forEach(key => dataToSave[key] === undefined && delete dataToSave[key]);
+          dataToSave.updatedAt = new Date().toISOString();
+          await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'tasks', id), dataToSave);
+          setEditingTask(null);
+      });
   };
 
-  const handleUpdateEmployee = async (e) => {
-    e.preventDefault();
-    if (!editingEmployee || !editingEmployee.name?.trim()) {
-      alert("教練姓名不能為空");
-      return;
-    }
-    triggerSync(async () => { 
-      // 過濾 undefined 與內部 id 欄位
-      const { id, ...dataToSave } = editingEmployee;
-      Object.keys(dataToSave).forEach(key => dataToSave[key] === undefined && delete dataToSave[key]);
-
-      dataToSave.name = dataToSave.name.trim();
-      if (dataToSave.baseSalary !== undefined && dataToSave.baseSalary !== '') {
-        dataToSave.baseSalary = Number(dataToSave.baseSalary);
-      }
-
-      await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'employees', editingEmployee.id), { 
-        ...dataToSave, 
-        updatedAt: new Date().toISOString() 
-      }); 
-      setEditingEmployee(null); 
-    });
+  const handleDeleteTask = (taskId) => {
+      setConfirmModal({ 
+          isOpen: true, type: 'danger', title: '刪除交辦事項', message: '確定刪除此任務？', 
+          action: async () => triggerSync(async () => await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'tasks', taskId))) 
+      });
   };
 
   const [customerSortConfig, setCustomerSortConfig] = useState({ key: 'usedClasses', direction: 'desc' });
@@ -2069,6 +2072,7 @@ const App = () => {
           <nav className="flex bg-slate-100 p-1.5 rounded-2xl overflow-x-auto shadow-inner border border-slate-200 w-full xl:w-auto">
             {[
               ...(!(userRole === 'coach' && employees.find(e => e.id === loggedInCoachId)?.type?.startsWith('temp')) ? [{ id: 'attendance', label: '出勤/請假', icon: <Timer size={16}/> }] : []),
+              { id: 'tasks', label: '交辦事項', icon: <ListTodo size={16}/> },
               { id: 'daily', label: '每日營運', icon: <Calendar size={16}/> }, 
               { id: 'athlete', label: '運動員專案', icon: <Dumbbell size={16}/> },
               { id: 'special', label: '特別活動', icon: <Gift size={16}/> }, 
@@ -2612,6 +2616,158 @@ const App = () => {
                   </div>
                 </div>
              )}
+          </div>
+        )}
+
+        {activeTab === 'tasks' && (
+          <div className="animate-in fade-in duration-300 font-black">
+            <div className="grid grid-cols-1 xl:grid-cols-3 gap-8">
+               <div className="bg-white p-8 md:p-10 rounded-[3rem] shadow-xl border border-slate-200 xl:col-span-1 h-fit">
+                 <div className="flex items-center gap-4 mb-8">
+                   <div className="p-4 bg-indigo-50 text-indigo-600 rounded-2xl"><MessageSquarePlus size={28} /></div>
+                   <div>
+                     <h2 className="text-2xl text-slate-800 tracking-tighter">新增交辦/回報</h2>
+                     <p className="text-[10px] text-slate-400 uppercase tracking-widest mt-1">建立新任務或向主管回報</p>
+                   </div>
+                 </div>
+                 <form onSubmit={handleCreateTask} className="space-y-5">
+                   <div className="space-y-1">
+                     <label className="text-[10px] text-slate-400 uppercase">指定接收人 (Assignee)</label>
+                     <select required className="w-full bg-slate-50 border border-slate-200 rounded-2xl p-3 text-sm font-black outline-none focus:border-indigo-400" value={taskFormData.assigneeId} onChange={e => setTaskFormData({...taskFormData, assigneeId: e.target.value})}>
+                       <option value="">-- 請選擇人員 --</option>
+                       {userRole !== 'boss' && <option value="boss">👑 老闆 / 營運主管</option>}
+                       {employees.filter(e => e.id !== (userRole === 'coach' ? loggedInCoachId : '')).map(e => <option key={e.id} value={e.id}>👤 {e.name}</option>)}
+                     </select>
+                   </div>
+                   <div className="space-y-1">
+                     <label className="text-[10px] text-slate-400 uppercase">任務標題 / 主旨</label>
+                     <input type="text" required placeholder="例如：確認下月排班、器材報修..." className="w-full bg-slate-50 border border-slate-200 rounded-2xl p-3 text-sm font-black outline-none focus:border-indigo-400" value={taskFormData.title} onChange={e => setTaskFormData({...taskFormData, title: e.target.value})} />
+                   </div>
+                   <div className="space-y-1">
+                     <label className="text-[10px] text-slate-400 uppercase">詳細說明 (選填)</label>
+                     <textarea placeholder="填寫更多任務細節..." rows={4} className="w-full bg-slate-50 border border-slate-200 rounded-2xl p-3 text-sm font-black outline-none focus:border-indigo-400 resize-none" value={taskFormData.description} onChange={e => setTaskFormData({...taskFormData, description: e.target.value})} />
+                   </div>
+                   <div className="space-y-1">
+                     <label className="text-[10px] text-slate-400 uppercase">期望完成日 (Due Date)</label>
+                     <input type="date" required className="w-full bg-slate-50 border border-slate-200 rounded-2xl p-3 text-sm font-black outline-none focus:border-indigo-400 font-mono" value={taskFormData.dueDate} onChange={e => setTaskFormData({...taskFormData, dueDate: e.target.value})} />
+                   </div>
+                   <button type="submit" className="w-full bg-indigo-600 text-white py-4 rounded-3xl font-black shadow-lg hover:bg-indigo-700 transition active:scale-95 flex items-center justify-center gap-2"><Send size={18} /> 發送交辦</button>
+                 </form>
+               </div>
+
+               <div className="bg-white p-8 md:p-10 rounded-[3rem] shadow-xl border border-slate-200 xl:col-span-2 min-h-[600px] flex flex-col">
+                 <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-8 gap-4 border-b border-slate-100 pb-6">
+                    <h2 className="text-2xl text-slate-800 flex items-center gap-3 tracking-tighter"><ListTodo className="text-amber-500" size={28} /> 任務列表</h2>
+                    <div className="flex bg-slate-100 p-1.5 rounded-2xl w-full md:w-auto">
+                      <button onClick={() => setTaskFilter('todo')} className={`flex-1 md:flex-none px-4 py-2 rounded-xl text-xs font-black transition-all ${taskFilter === 'todo' ? 'bg-amber-500 text-white shadow-md' : 'text-slate-500 hover:text-slate-700'}`}>待辦事項</button>
+                      <button onClick={() => setTaskFilter('assigned_by_me')} className={`flex-1 md:flex-none px-4 py-2 rounded-xl text-xs font-black transition-all ${taskFilter === 'assigned_by_me' ? 'bg-indigo-500 text-white shadow-md' : 'text-slate-500 hover:text-slate-700'}`}>我交辦的</button>
+                      <button onClick={() => setTaskFilter('completed')} className={`flex-1 md:flex-none px-4 py-2 rounded-xl text-xs font-black transition-all ${taskFilter === 'completed' ? 'bg-emerald-500 text-white shadow-md' : 'text-slate-500 hover:text-slate-700'}`}>已完成</button>
+                    </div>
+                 </div>
+                 
+                 <div className="flex-1 space-y-4 overflow-y-auto pr-2">
+                    {(() => {
+                        const myId = userRole === 'boss' ? 'boss' : loggedInCoachId;
+                        const filteredTasks = tasks.filter(t => {
+                            if (taskFilter === 'todo') return t.status !== 'completed' && t.status !== 'cancelled' && t.assigneeId === myId;
+                            if (taskFilter === 'assigned_by_me') return t.assignerId === myId;
+                            if (taskFilter === 'completed') return t.status === 'completed' && (t.assigneeId === myId || t.assignerId === myId);
+                            return false;
+                        }).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+
+                        if (filteredTasks.length === 0) return <div className="text-center p-10 text-slate-400 font-sans tracking-widest uppercase">目前沒有符合條件的任務。</div>;
+
+                        return filteredTasks.map(task => {
+                            const assignerName = task.assignerId === 'boss' ? '老闆/主管' : (employees.find(e => e.id === task.assignerId)?.name || '未知');
+                            const assigneeName = task.assigneeId === 'boss' ? '老闆/主管' : (employees.find(e => e.id === task.assigneeId)?.name || '未知');
+                            const isMyTask = task.assigneeId === myId;
+                            const isCreatedByMe = task.assignerId === myId;
+                            const isOverdue = task.status !== 'completed' && task.dueDate < getLocalDateString();
+
+                            return (
+                                <div key={task.id} className={`p-5 rounded-3xl border transition-all ${task.status === 'completed' ? 'bg-slate-50 border-slate-200 opacity-70' : isOverdue ? 'bg-rose-50/30 border-rose-200 shadow-sm' : 'bg-white border-slate-200 shadow-sm hover:border-indigo-300'}`}>
+                                    <div className="flex flex-col md:flex-row justify-between gap-4">
+                                        <div className="flex-1">
+                                            <div className="flex items-center gap-2 mb-2 flex-wrap">
+                                                <span className={`text-[10px] px-2 py-0.5 rounded border font-black uppercase tracking-widest ${task.status === 'completed' ? 'bg-emerald-100 text-emerald-700 border-emerald-200' : task.status === 'in_progress' ? 'bg-blue-100 text-blue-700 border-blue-200' : 'bg-amber-100 text-amber-700 border-amber-200'}`}>
+                                                    {task.status === 'completed' ? '已完成' : task.status === 'in_progress' ? '處理中' : '待處理'}
+                                                </span>
+                                                <span className={`text-[10px] px-2 py-0.5 rounded border font-mono ${isOverdue ? 'bg-rose-100 text-rose-700 border-rose-200' : 'bg-slate-100 text-slate-500 border-slate-200'}`}>
+                                                    期限: {task.dueDate} {isOverdue && '⚠️ 逾期'}
+                                                </span>
+                                                <span className="text-[10px] text-slate-400 bg-slate-50 px-2 py-0.5 rounded flex items-center gap-1 border border-slate-100">
+                                                    {assignerName} <ArrowRight size={10}/> {assigneeName}
+                                                </span>
+                                            </div>
+                                            <h4 className={`text-lg font-black tracking-tighter ${task.status === 'completed' ? 'text-slate-500 line-through' : 'text-slate-800'}`}>{task.title}</h4>
+                                            {task.description && <p className="text-sm text-slate-500 mt-2 font-sans whitespace-pre-wrap">{task.description}</p>}
+                                            
+                                            {task.replies && task.replies.length > 0 && (
+                                                <div className="mt-4 space-y-2 border-t border-slate-100 pt-4">
+                                                    {task.replies.map((reply, idx) => {
+                                                        const senderName = reply.senderId === 'boss' ? '老闆/主管' : (employees.find(e => e.id === reply.senderId)?.name || '未知');
+                                                        const isMe = reply.senderId === myId;
+                                                        return (
+                                                            <div key={idx} className={`p-3 rounded-2xl text-sm w-fit max-w-[90%] ${isMe ? 'bg-indigo-50 border border-indigo-100 ml-auto rounded-tr-sm' : 'bg-slate-100 border border-slate-200 rounded-tl-sm'}`}>
+                                                                <div className="flex items-center gap-2 mb-1">
+                                                                    <span className={`text-[10px] font-black ${isMe ? 'text-indigo-600' : 'text-slate-600'}`}>{senderName}</span>
+                                                                    <span className="text-[9px] text-slate-400">{new Date(reply.createdAt).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>
+                                                                </div>
+                                                                <p className="text-slate-700 whitespace-pre-wrap">{reply.text}</p>
+                                                            </div>
+                                                        )
+                                                    })}
+                                                </div>
+                                            )}
+                                            
+                                            <div className="mt-4 flex gap-2">
+                                                <input 
+                                                    type="text" 
+                                                    placeholder="回覆報告內容..." 
+                                                    className="flex-1 bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm outline-none focus:border-indigo-400 focus:bg-white transition-colors" 
+                                                    value={replyInputs[task.id] || ''}
+                                                    onChange={(e) => setReplyInputs(prev => ({...prev, [task.id]: e.target.value}))}
+                                                    onKeyDown={(e) => {
+                                                        if (e.key === 'Enter') {
+                                                            e.preventDefault();
+                                                            handleAddReply(task.id, replyInputs[task.id]);
+                                                        }
+                                                    }}
+                                                />
+                                                <button 
+                                                    onClick={() => handleAddReply(task.id, replyInputs[task.id])}
+                                                    disabled={!replyInputs[task.id]?.trim()}
+                                                    className="bg-indigo-100 text-indigo-600 px-4 py-2 rounded-xl text-sm font-black hover:bg-indigo-200 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
+                                                >
+                                                    <MessageSquare size={14} /> 回覆
+                                                </button>
+                                            </div>
+                                        </div>
+                                        <div className="flex items-center md:flex-col gap-2 justify-end shrink-0 border-t md:border-t-0 md:border-l border-slate-100 pt-3 md:pt-0 md:pl-4">
+                                            {isMyTask && task.status === 'pending' && (
+                                                <button onClick={() => handleUpdateTaskStatus(task.id, 'in_progress')} className="px-4 py-2 bg-blue-50 text-blue-600 rounded-xl font-black text-xs hover:bg-blue-100 border border-blue-200 w-full whitespace-nowrap">標記處理中</button>
+                                            )}
+                                            {isMyTask && (task.status === 'pending' || task.status === 'in_progress') && (
+                                                <button onClick={() => handleUpdateTaskStatus(task.id, 'completed')} className="px-4 py-2 bg-emerald-500 text-white rounded-xl font-black text-xs hover:bg-emerald-600 shadow-md flex items-center justify-center gap-1 w-full whitespace-nowrap"><CheckCircle size={14}/> 標記完成</button>
+                                            )}
+                                            {isMyTask && task.status === 'completed' && (
+                                                <button onClick={() => handleUpdateTaskStatus(task.id, 'pending')} className="px-4 py-2 bg-slate-100 text-slate-500 rounded-xl font-black text-xs hover:bg-slate-200 border border-slate-200 w-full whitespace-nowrap">退回待辦</button>
+                                            )}
+                                            {(isCreatedByMe || userRole === 'boss') && (
+                                                <div className="flex gap-2 w-full md:w-auto mt-2 md:mt-0">
+                                                    <button onClick={() => setEditingTask(task)} className="flex-1 md:flex-none p-2 text-slate-400 hover:text-amber-500 transition-colors bg-slate-50 rounded-xl border border-slate-100 flex justify-center"><Edit2 size={16} /></button>
+                                                    <button onClick={() => handleDeleteTask(task.id)} className="flex-1 md:flex-none p-2 text-slate-400 hover:text-rose-500 transition-colors bg-slate-50 rounded-xl border border-slate-100 flex justify-center"><Trash2 size={16} /></button>
+                                                </div>
+                                            )}
+                                        </div>
+                                    </div>
+                                </div>
+                            );
+                        });
+                    })()}
+                 </div>
+               </div>
+            </div>
           </div>
         )}
 
@@ -4391,6 +4547,38 @@ const App = () => {
                   </div>
                 </div>
                 <button type="submit" className="w-full bg-amber-600 text-white py-4 rounded-2xl font-black text-xl shadow-xl active:scale-95 transition">確認儲存</button>
+              </form>
+            </div>
+          </div>
+        )}
+
+        {editingTask && (
+          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[110] flex items-center justify-center p-4 font-black">
+            <div className="bg-white rounded-[3.5rem] w-full max-w-xl max-h-[90vh] overflow-y-auto shadow-2xl p-10 relative border border-slate-200 font-sans">
+              <button onClick={() => setEditingTask(null)} className="absolute top-8 right-8 text-slate-300 hover:text-slate-900 transition-all font-black"><X size={32} /></button>
+              <h3 className="text-3xl font-black mb-10 flex items-center gap-4 text-indigo-600 uppercase tracking-widest"><Edit2 size={32} /> 修改交辦事項</h3>
+              <form onSubmit={handleUpdateTask} className="space-y-6">
+                <div className="space-y-1">
+                  <label className="text-[10px] text-slate-400 uppercase">指定接收人 (Assignee)</label>
+                  <select required className="w-full bg-slate-50 border border-slate-200 rounded-2xl p-3 text-sm font-black outline-none focus:border-indigo-400" value={editingTask.assigneeId} onChange={e => setEditingTask({...editingTask, assigneeId: e.target.value})}>
+                    <option value="">-- 請選擇人員 --</option>
+                    {userRole !== 'boss' && <option value="boss">👑 老闆 / 營運主管</option>}
+                    {employees.filter(e => e.id !== (userRole === 'coach' ? loggedInCoachId : '')).map(e => <option key={e.id} value={e.id}>👤 {e.name}</option>)}
+                  </select>
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[10px] text-slate-400 uppercase">任務標題 / 主旨</label>
+                  <input type="text" required placeholder="例如：確認下月排班、器材報修..." className="w-full bg-slate-50 border border-slate-200 rounded-2xl p-3 text-sm font-black outline-none focus:border-indigo-400" value={editingTask.title} onChange={e => setEditingTask({...editingTask, title: e.target.value})} />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[10px] text-slate-400 uppercase">詳細說明 (選填)</label>
+                  <textarea placeholder="填寫更多任務細節..." rows={4} className="w-full bg-slate-50 border border-slate-200 rounded-2xl p-3 text-sm font-black outline-none focus:border-indigo-400 resize-none" value={editingTask.description} onChange={e => setEditingTask({...editingTask, description: e.target.value})} />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[10px] text-slate-400 uppercase">期望完成日 (Due Date)</label>
+                  <input type="date" required className="w-full bg-slate-50 border border-slate-200 rounded-2xl p-3 text-sm font-black outline-none focus:border-indigo-400 font-mono" value={editingTask.dueDate} onChange={e => setEditingTask({...editingTask, dueDate: e.target.value})} />
+                </div>
+                <button type="submit" className="w-full bg-indigo-600 text-white py-4 rounded-3xl font-black shadow-lg hover:bg-indigo-700 transition active:scale-95 flex items-center justify-center gap-2">儲存修改</button>
               </form>
             </div>
           </div>
