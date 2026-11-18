@@ -198,6 +198,7 @@ const App = () => {
   const [editingEmployee, setEditingEmployee] = useState(null);
   const [editingSalaryAdj, setEditingSalaryAdj] = useState(null);
   const [editingTask, setEditingTask] = useState(null);
+  const [editingRecord, setEditingRecord] = useState(null);
   const [confirmModal, setConfirmModal] = useState({ isOpen: false, type: 'danger', title: '', message: '', action: null });
   const [aiModal, setAiModal] = useState({ isOpen: false, title: '', content: '', isLoading: false });
   const [showPayslipModal, setShowPayslipModal] = useState(false);
@@ -2453,6 +2454,7 @@ const App = () => {
                        <div className="flex items-center gap-2 bg-slate-50 px-4 py-2 rounded-xl border border-slate-200">
                          <Clock size={16} className="text-slate-400" />
                          <input type="month" className="bg-transparent outline-none text-slate-700 font-mono text-sm" value={logQueryMonth} onChange={(e) => setLogQueryMonth(e.target.value)} />
+                         <button onClick={() => setEditingRecord({ employeeId: '', date: getLocalDateString(), clockInTime: '09:00', clockOutTime: '18:00', isNew: true })} className="ml-2 text-xs bg-indigo-100 text-indigo-700 px-3 py-1.5 rounded-lg hover:bg-indigo-200 font-black transition">補增紀錄</button>
                        </div>
                      </div>
 
@@ -2490,21 +2492,28 @@ const App = () => {
                                     const m = group.totalMinutes % 60;
                                     const sortedSegments = group.segments.sort((a,b) => a.clockInTime.localeCompare(b.clockInTime));
                                     const hasActive = sortedSegments.some(s => !s.clockOutTime);
+                                    const isAbnormal = hasActive && group.date < getLocalDateString();
 
                                     return (
-                                      <tr key={`${group.date}_${group.employeeId}`} className="hover:bg-slate-50 transition">
+                                      <tr key={`${group.date}_${group.employeeId}`} className={`transition ${isAbnormal ? 'bg-rose-50/30' : 'hover:bg-slate-50'}`}>
                                         <td className="p-6 font-mono text-slate-500">{group.date}</td>
                                         <td className="p-6 font-black text-slate-800 text-lg flex items-center gap-2">
-                                          <div className="w-8 h-8 rounded-full bg-slate-200 flex items-center justify-center text-xs">{emp?.name?.[0]}</div>
+                                          <div className={`w-8 h-8 rounded-full ${isAbnormal ? 'bg-rose-200 text-rose-700' : 'bg-slate-200'} flex items-center justify-center text-xs`}>{emp?.name?.[0]}</div>
                                           {emp?.name || '未知'}
+                                          {isAbnormal && <span className="text-[10px] bg-rose-100 text-rose-600 px-2 py-0.5 rounded border border-rose-200 ml-1">異常: 未下班</span>}
                                         </td>
                                         <td className="p-6">
-                                          <div className="flex flex-col gap-1">
+                                          <div className="flex flex-col gap-2">
                                             {sortedSegments.map(seg => (
-                                              <div key={seg.id} className="font-mono text-sm bg-slate-50 border border-slate-100 rounded px-2 py-1 w-fit flex gap-2">
-                                                <span className="text-emerald-600 font-black">{seg.clockInTime}</span>
-                                                <span className="text-slate-300">-</span>
-                                                <span className={`font-black ${seg.clockOutTime ? "text-rose-500" : "text-slate-400 font-sans text-xs tracking-widest uppercase"}`}>{seg.clockOutTime || '執勤中'}</span>
+                                              <div key={seg.id} className="flex items-center gap-2">
+                                                <div className="font-mono text-sm bg-slate-50 border border-slate-100 rounded px-2 py-1 w-fit flex gap-2">
+                                                  <span className="text-emerald-600 font-black">{seg.clockInTime}</span>
+                                                  <span className="text-slate-300">-</span>
+                                                  <span className={`font-black ${seg.clockOutTime ? "text-rose-500" : "text-slate-400 font-sans text-xs tracking-widest uppercase"}`}>{seg.clockOutTime || '執勤中'}</span>
+                                                </div>
+                                                {userRole === 'boss' && (
+                                                  <button onClick={() => setEditingRecord({...seg})} className="text-slate-300 hover:text-amber-500 transition-colors p-1"><Edit2 size={14}/></button>
+                                                )}
                                               </div>
                                             ))}
                                           </div>
@@ -4445,9 +4454,9 @@ const App = () => {
               <button onClick={() => setEditingEmployee(null)} className="absolute top-8 right-8 text-slate-300 hover:text-slate-900 transition-all font-black"><X size={32} /></button>
               <h3 className="text-3xl font-black mb-10 flex items-center gap-4 text-indigo-600 uppercase tracking-widest"><Users size={32} /> 修改教練資訊</h3>
               <form onSubmit={handleUpdateEmployee} className="space-y-6">
-                <input type="text" className="w-full bg-slate-50 border border-slate-200 rounded-2xl p-4 font-black outline-none shadow-sm" value={editingEmployee.name} onChange={(e) => setEditingEmployee({...editingEmployee, name: e.target.value})} />
+                <input type="text" className="w-full bg-slate-50 border border-slate-200 rounded-2xl p-4 font-black outline-none shadow-sm" value={editingEmployee.name || ''} onChange={(e) => setEditingEmployee({...editingEmployee, name: e.target.value})} />
                 <div className="grid grid-cols-2 gap-4">
-                  <select className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 font-black outline-none" value={editingEmployee.type} onChange={(e) => setEditingEmployee({...editingEmployee, type: e.target.value})}>
+                  <select className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 font-black outline-none" value={editingEmployee.type || 'formalA'} onChange={(e) => setEditingEmployee({...editingEmployee, type: e.target.value})}>
                     <option value="formalA">正式 A</option>
                     <option value="formalB">正式 B</option>
                     <option value="tempA">承攬 A</option>
@@ -4579,6 +4588,95 @@ const App = () => {
                   <input type="date" required className="w-full bg-slate-50 border border-slate-200 rounded-2xl p-3 text-sm font-black outline-none focus:border-indigo-400 font-mono" value={editingTask.dueDate} onChange={e => setEditingTask({...editingTask, dueDate: e.target.value})} />
                 </div>
                 <button type="submit" className="w-full bg-indigo-600 text-white py-4 rounded-3xl font-black shadow-lg hover:bg-indigo-700 transition active:scale-95 flex items-center justify-center gap-2">儲存修改</button>
+              </form>
+            </div>
+          </div>
+        )}
+
+        {editingRecord && (
+          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[110] flex items-center justify-center p-4 font-black">
+            <div className="bg-white rounded-[3.5rem] w-full max-w-xl max-h-[90vh] overflow-y-auto shadow-2xl p-10 relative border border-slate-200 font-sans">
+              <button onClick={() => setEditingRecord(null)} className="absolute top-8 right-8 text-slate-300 hover:text-slate-900 transition-all font-black"><X size={32} /></button>
+              <h3 className="text-3xl font-black mb-10 flex items-center gap-4 text-indigo-600 uppercase tracking-widest"><Timer size={32} /> {editingRecord.isNew ? '補增打卡紀錄' : '修改打卡紀錄'}</h3>
+              <form onSubmit={async (e) => {
+                  e.preventDefault();
+                  const inTime = editingRecord.clockInTime;
+                  const outTime = editingRecord.clockOutTime;
+                  let workMinutes = 0;
+                  if (inTime && outTime) {
+                      const [inH, inM] = inTime.split(':').map(Number);
+                      const [outH, outM] = outTime.split(':').map(Number);
+                      workMinutes = (outH * 60 + outM) - (inH * 60 + inM);
+                      if (workMinutes < 0) workMinutes += 24 * 60;
+                  }
+                  triggerSync(async () => {
+                      if (editingRecord.isNew) {
+                          if (!editingRecord.employeeId) { alert("請選擇員工"); return; }
+                          await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'attendance'), {
+                              employeeId: editingRecord.employeeId,
+                              date: editingRecord.date,
+                              clockInTime: inTime,
+                              clockOutTime: outTime || null,
+                              workMinutes: outTime ? workMinutes : 0,
+                              type: 'normal',
+                              status: 'approved',
+                              createdAt: new Date().toISOString(),
+                              updatedAt: new Date().toISOString()
+                          });
+                      } else {
+                          await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'attendance', editingRecord.id), {
+                              date: editingRecord.date,
+                              clockInTime: inTime,
+                              clockOutTime: outTime || null,
+                              workMinutes: outTime ? workMinutes : 0,
+                              updatedAt: new Date().toISOString()
+                          });
+                      }
+                      setEditingRecord(null);
+                  });
+              }} className="space-y-6">
+                
+                {editingRecord.isNew && (
+                  <div className="space-y-1">
+                    <label className="text-[10px] text-slate-400 uppercase">員工</label>
+                    <select required className="w-full bg-slate-50 border border-slate-200 rounded-2xl p-3 text-sm font-black outline-none focus:border-indigo-400" value={editingRecord.employeeId} onChange={e => setEditingRecord({...editingRecord, employeeId: e.target.value})}>
+                      <option value="">-- 請選擇人員 --</option>
+                      {employees.map(e => <option key={e.id} value={e.id}>{e.name}</option>)}
+                    </select>
+                  </div>
+                )}
+                
+                <div className="space-y-1">
+                  <label className="text-[10px] text-slate-400 uppercase">日期</label>
+                  <input type="date" required className="w-full bg-slate-50 border border-slate-200 rounded-2xl p-3 text-sm font-black outline-none focus:border-indigo-400 font-mono" value={editingRecord.date} onChange={e => setEditingRecord({...editingRecord, date: e.target.value})} />
+                </div>
+                
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-1">
+                    <label className="text-[10px] text-slate-400 uppercase">上班時間</label>
+                    <input type="time" required className="w-full bg-slate-50 border border-slate-200 rounded-2xl p-3 text-sm font-black outline-none focus:border-indigo-400 font-mono" value={editingRecord.clockInTime} onChange={e => setEditingRecord({...editingRecord, clockInTime: e.target.value})} />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[10px] text-slate-400 uppercase">下班時間 (未下班留空)</label>
+                    <input type="time" className="w-full bg-slate-50 border border-slate-200 rounded-2xl p-3 text-sm font-black outline-none focus:border-indigo-400 font-mono" value={editingRecord.clockOutTime || ''} onChange={e => setEditingRecord({...editingRecord, clockOutTime: e.target.value})} />
+                  </div>
+                </div>
+                
+                <div className="flex gap-4 pt-4 border-t border-slate-100">
+                  <button type="submit" className="flex-1 bg-indigo-600 text-white py-4 rounded-3xl font-black shadow-lg hover:bg-indigo-700 transition active:scale-95 flex items-center justify-center gap-2">儲存紀錄</button>
+                  {!editingRecord.isNew && (
+                      <button type="button" onClick={() => {
+                          setConfirmModal({
+                              isOpen: true, type: 'danger', title: '刪除打卡紀錄', message: '確定要刪除這筆打卡紀錄嗎？(無法復原)', action: async () => {
+                                  triggerSync(async () => {
+                                      await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'attendance', editingRecord.id));
+                                      setEditingRecord(null);
+                                  });
+                              }
+                          });
+                      }} className="bg-rose-50 text-rose-600 px-6 py-4 rounded-3xl font-black hover:bg-rose-100 transition active:scale-95 border border-rose-200"><Trash2 size={20} /></button>
+                  )}
+                </div>
               </form>
             </div>
           </div>
