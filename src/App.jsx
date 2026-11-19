@@ -186,6 +186,7 @@ const App = () => {
   const [collectionEndDate, setCollectionEndDate] = useState(getLocalDateString());
   const [summaryMonth, setSummaryMonth] = useState(getLocalMonthString());
   const [syncStatus, setSyncStatus] = useState('idle');
+  const [importFeedback, setImportFeedback] = useState(null);
 
   const [logQueryType, setLogQueryType] = useState('date');
   const [logQueryDate, setLogQueryDate] = useState(getLocalDateString());
@@ -1287,6 +1288,44 @@ const App = () => {
       });
   };
 
+  const handleUpdateEmployee = async (e) => {
+      e.preventDefault();
+      if (!editingEmployee) return;
+      triggerSync(async () => {
+          const { id, ...dataToSave } = editingEmployee;
+          Object.keys(dataToSave).forEach(key => dataToSave[key] === undefined && delete dataToSave[key]);
+          dataToSave.updatedAt = new Date().toISOString();
+          await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'employees', id), dataToSave);
+          setEditingEmployee(null);
+      });
+  };
+
+  const handleUpdateCustomer = async (e) => {
+      e.preventDefault();
+      if (!editingCustomer) return;
+      triggerSync(async () => {
+          const { id, ...dataToSave } = editingCustomer;
+          Object.keys(dataToSave).forEach(key => dataToSave[key] === undefined && delete dataToSave[key]);
+          dataToSave.remaining = Number(dataToSave.remaining) || 0;
+          dataToSave.updatedAt = new Date().toISOString();
+          await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'customers', id), dataToSave);
+          setEditingCustomer(null);
+      });
+  };
+
+  const handleUpdateLog = async (e) => {
+      e.preventDefault();
+      if (!editingLog) return;
+      triggerSync(async () => {
+          // 排除掉前端畫面運算產生的暫時屬性，只把真實資料存回資料庫
+          const { id, calc, isOwn, isSource, cumulativeAfter, seqCount, ...dataToSave } = editingLog;
+          Object.keys(dataToSave).forEach(key => dataToSave[key] === undefined && delete dataToSave[key]);
+          dataToSave.updatedAt = new Date().toISOString();
+          await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'logs', id), dataToSave);
+          setEditingLog(null);
+      });
+  };
+
   const handleDeleteTask = (taskId) => {
       setConfirmModal({ 
           isOpen: true, type: 'danger', title: '刪除交辦事項', message: '確定刪除此任務？', 
@@ -1577,30 +1616,133 @@ const App = () => {
     link.click();
   };
 
+  // 解析預約系統備份檔中的 teacherProfiles 並寫入教練資料庫
+  const importTeacherProfiles = async (teacherProfiles) => {
+    let addedCount = 0;
+    let updatedCount = 0;
+    for (const [rawName, profile] of Object.entries(teacherProfiles)) {
+      const name = rawName.trim();
+      if (!name) continue;
+      const mappedType = profile?.type === 'fulltime' ? 'formalA' : 'tempA';
+      const mappedStartDate = profile?.hireDate || getLocalDateString();
+      const isBoss = name === '顏秀如';
+
+      const existing = employees.find(e => e.name?.trim() === name);
+      if (existing) {
+        await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'employees', existing.id), {
+          startDate: existing.startDate || mappedStartDate,
+          updatedAt: new Date().toISOString()
+        });
+        updatedCount++;
+      } else {
+        await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'employees'), {
+          name,
+          xValue: '',
+          type: mappedType,
+          isBossNoPay: isBoss,
+          baseSalary: '',
+          startDate: mappedStartDate,
+          projectTitle: '',
+          promotionDate: '',
+          prePromotionType: '',
+          createdAt: new Date().toISOString()
+        });
+        addedCount++;
+      }
+    }
+    return { addedCount, updatedCount };
+  };
+
+  // 從 JSON 備份檔匯入教練資料（支援 teacherProfiles 與 employees 格式）
+  const handleImportCoachesFile = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      try {
+        const data = JSON.parse(event.target.result);
+        const hasTeacherProfiles = data.teacherProfiles && typeof data.teacherProfiles === 'object';
+        const hasEmployeesArray = Array.isArray(data.employees);
+        if (!hasTeacherProfiles && !hasEmployeesArray) {
+          setImportFeedback({ type: 'error', text: '檔案中找不到教練資料（teacherProfiles 或 employees）。' });
+          setTimeout(() => setImportFeedback(null), 5000);
+          return;
+        }
+        const coachCount = hasTeacherProfiles ? Object.keys(data.teacherProfiles).length : data.employees.length;
+        setConfirmModal({
+          isOpen: true,
+          type: 'warning',
+          title: '匯入教練資料確認',
+          message: `偵測到 ${coachCount} 位教練資料（fulltime 將自動對應為「正式 A」、contractor 對應為「承攬 A」，同名教練將保留原設定並補齊入職日）。確定要匯入嗎？`,
+          action: async () => {
+            setSyncStatus('syncing');
+            try {
+              let msg = '';
+              if (hasTeacherProfiles) {
+                const { addedCount, updatedCount } = await importTeacherProfiles(data.teacherProfiles);
+                msg = `教練匯入完成！新增 ${addedCount} 位、更新/保留已存在 ${updatedCount} 位。`;
+              } else if (hasEmployeesArray) {
+                for (const item of data.employees) {
+                  await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'employees', item.id), item);
+                }
+                msg = `已成功匯入 ${data.employees.length} 位教練資料！`;
+              }
+              setSyncStatus('success');
+              setImportFeedback({ type: 'success', text: msg });
+              setTimeout(() => setSyncStatus('idle'), 2000);
+              setTimeout(() => setImportFeedback(null), 6000);
+            } catch (err) {
+              setSyncStatus('error');
+              setImportFeedback({ type: 'error', text: `匯入失敗：${err.message}` });
+              setTimeout(() => setSyncStatus('idle'), 3000);
+            }
+          }
+        });
+      } catch (err) {
+        setImportFeedback({ type: 'error', text: 'JSON 檔案解析失敗，請確認檔案格式是否正確。' });
+        setTimeout(() => setImportFeedback(null), 5000);
+      }
+      e.target.value = '';
+    };
+    reader.readAsText(file);
+  };
+
   const handleImportDatabase = (e) => {
     const file = e.target.files[0];
     if (!file) return;
     setConfirmModal({
       isOpen: true, type: 'warning', title: '資料庫覆蓋警告',
-      message: '匯入將會把備份檔的資料完整寫入當前版本。確定要執行嗎？',
+      message: '匯入將會把備份檔的資料完整寫入當前版本（亦支援匯入預約系統備份檔中的教練清單）。確定要執行嗎？',
       action: async () => {
         setSyncStatus('syncing');
         try {
           const reader = new FileReader();
           reader.onload = async (event) => {
-            const data = JSON.parse(event.target.result);
-            if (data.employees) for (const item of data.employees) await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'employees', item.id), item);
-            if (data.customers) for (const item of data.customers) await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'customers', item.id), item);
-            if (data.logs) for (const item of data.logs) await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'logs', item.id), item);
-            setSyncStatus('success');
-            setTimeout(() => setSyncStatus('idle'), 2000);
-            alert('資料庫遷移成功！');
+            try {
+              const data = JSON.parse(event.target.result);
+              let resultMsg = '資料庫遷移成功！';
+              if (data.teacherProfiles && typeof data.teacherProfiles === 'object') {
+                const { addedCount, updatedCount } = await importTeacherProfiles(data.teacherProfiles);
+                resultMsg = `已從備份檔匯入教練：新增 ${addedCount} 位、更新/保留 ${updatedCount} 位。`;
+              }
+              if (data.employees) for (const item of data.employees) await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'employees', item.id), item);
+              if (data.customers) for (const item of data.customers) await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'customers', item.id), item);
+              if (data.logs) for (const item of data.logs) await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'logs', item.id), item);
+              setSyncStatus('success');
+              setImportFeedback({ type: 'success', text: resultMsg });
+              setTimeout(() => setSyncStatus('idle'), 2000);
+              setTimeout(() => setImportFeedback(null), 6000);
+            } catch (parseErr) {
+              setSyncStatus('error');
+              setImportFeedback({ type: 'error', text: '匯入失敗，請確認 JSON 檔案格式。' });
+              setTimeout(() => setSyncStatus('idle'), 3000);
+            }
           };
           reader.readAsText(file);
         } catch (error) {
           setSyncStatus('error');
           setTimeout(() => setSyncStatus('idle'), 3000);
-          alert('匯入失敗，請確認檔案格式。');
+          setImportFeedback({ type: 'error', text: '匯入失敗，請確認檔案格式。' });
         }
         e.target.value = '';
       }
@@ -3674,7 +3816,21 @@ const App = () => {
         {activeTab === 'employees' && userRole === 'boss' && (
           <div className="max-w-4xl mx-auto space-y-8 animate-in zoom-in font-black">
              <div className="bg-white p-12 rounded-[3.5rem] shadow-xl border border-slate-200">
-                <h2 className="text-3xl font-black mb-10 flex items-center gap-4 text-slate-800 italic underline decoration-amber-500">教練管理系統</h2>
+                <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-10">
+                  <h2 className="text-3xl font-black flex items-center gap-4 text-slate-800 italic underline decoration-amber-500">教練管理系統</h2>
+                  <div>
+                    <input type="file" id="coach-json-upload" accept=".json" className="hidden" onChange={handleImportCoachesFile} />
+                    <label htmlFor="coach-json-upload" className="bg-slate-900 text-white px-6 py-3.5 rounded-2xl text-xs font-black shadow-lg hover:bg-slate-800 active:scale-95 transition flex items-center gap-2 cursor-pointer">
+                      <Upload size={16} /> 匯入教練資料 (JSON)
+                    </label>
+                  </div>
+                </div>
+                {importFeedback && (
+                  <div className={`mb-6 p-4 rounded-2xl border text-sm font-black flex items-center justify-between ${importFeedback.type === 'success' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-rose-50 text-rose-700 border-rose-200'}`}>
+                    <span>{importFeedback.text}</span>
+                    <button type="button" onClick={() => setImportFeedback(null)} className="opacity-60 hover:opacity-100"><X size={16}/></button>
+                  </div>
+                )}
                 <form onSubmit={handleAddEmployee} className="space-y-6">
                   <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-4">
                     <button type="button" onClick={() => setNewEmp({...newEmp, type: 'formalA'})} className={`py-4 px-2 rounded-[1.5rem] text-xs font-black transition-all ${newEmp.type === 'formalA' ? 'bg-amber-600 text-white shadow-xl' : 'bg-slate-100 text-slate-400 hover:bg-slate-200'}`}>正式 A</button>
@@ -3839,7 +3995,13 @@ const App = () => {
           <div className="max-w-4xl mx-auto animate-in zoom-in font-black">
              <div className="bg-white p-12 rounded-[3.5rem] shadow-xl border border-slate-200">
                 <div className="flex items-center gap-4 mb-4"><div className="bg-slate-900 p-4 rounded-3xl text-white shadow-lg"><Settings2 size={32} /></div><h2 className="text-3xl font-black text-slate-800 uppercase tracking-widest italic underline decoration-amber-500">系統資料庫遷移</h2></div>
-                <p className="text-slate-400 text-xs mb-10 tracking-widest leading-relaxed">跨版本數據匯入/匯出。請先匯出 JSON 備份檔，再至新系統匯入即可完成資料遷移。</p>
+                <p className="text-slate-400 text-xs mb-10 tracking-widest leading-relaxed">跨版本數據匯入/匯出。亦支援直接匯入預約系統備份檔（自動解析 teacherProfiles 教練清單）。</p>
+                {importFeedback && (
+                  <div className={`mb-6 p-4 rounded-2xl border text-sm font-black flex items-center justify-between ${importFeedback.type === 'success' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-rose-50 text-rose-700 border-rose-200'}`}>
+                    <span>{importFeedback.text}</span>
+                    <button type="button" onClick={() => setImportFeedback(null)} className="opacity-60 hover:opacity-100"><X size={16}/></button>
+                  </div>
+                )}
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                   <div className="bg-amber-50 p-8 rounded-[2.5rem] border border-amber-200 flex flex-col items-center justify-center text-center gap-4 shadow-inner"><FileJson size={48} className="text-amber-500" /><h3 className="text-xl font-black text-amber-800">1. 下載舊版備份</h3><button onClick={handleExportDatabase} className="w-full bg-amber-600 text-white py-5 rounded-[2rem] font-black shadow-xl hover:bg-amber-700 active:scale-95 flex items-center justify-center gap-2"><Download size={20} /> 匯出資料庫</button></div>
                   <div className="bg-slate-50 p-8 rounded-[2.5rem] border border-slate-200 flex flex-col items-center justify-center text-center gap-4 shadow-inner relative"><Upload size={48} className="text-slate-400" /><h3 className="text-xl font-black text-slate-700">2. 匯入新版系統</h3><input type="file" id="db-upload" accept=".json" className="hidden" onChange={handleImportDatabase} /><label htmlFor="db-upload" className="w-full bg-slate-900 text-white py-5 rounded-[2rem] font-black shadow-xl hover:bg-slate-800 active:scale-95 flex items-center justify-center gap-2 cursor-pointer"><Upload size={20} /> 選擇檔案匯入</label></div>
