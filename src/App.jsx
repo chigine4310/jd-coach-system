@@ -118,6 +118,32 @@ const LEAVE_TYPES = {
   'typhoon': { label: '颱風假', rate: 0.0, advanceDays: 0, notice: '依政府停班停課公告為準，免扣薪', color: 'text-cyan-600 bg-cyan-50 border-cyan-200' }
 };
 
+// 常見請款項目分類定義
+const EXPENSE_CATEGORIES = [
+  { id: '進修補助', label: '進修補助 (限正職)', formalOnly: true, color: 'bg-indigo-100 text-indigo-700 border-indigo-200', barColor: 'bg-indigo-500' },
+  { id: '器材耗材', label: '器材耗材 (滾筒/貼布/酒精等)', formalOnly: false, color: 'bg-amber-100 text-amber-700 border-amber-200', barColor: 'bg-amber-500' },
+  { id: '店務水電/修繕', label: '店務水電/修繕 (濾心/清潔/維修)', formalOnly: false, color: 'bg-sky-100 text-sky-700 border-sky-200', barColor: 'bg-sky-500' },
+  { id: '學員活動/茶點', label: '學員活動/茶點 (飲水/講座點心)', formalOnly: false, color: 'bg-emerald-100 text-emerald-700 border-emerald-200', barColor: 'bg-emerald-500' },
+  { id: '交通/出差雜支', label: '交通/出差雜支 (停車/車資/外派)', formalOnly: false, color: 'bg-fuchsia-100 text-fuchsia-700 border-fuchsia-200', barColor: 'bg-fuchsia-500' },
+  { id: '行銷/印刷文宣', label: '行銷/印刷文宣 (名片/海報/廣告)', formalOnly: false, color: 'bg-rose-100 text-rose-700 border-rose-200', barColor: 'bg-rose-500' },
+  { id: '其他雜支', label: '其他雜支', formalOnly: false, color: 'bg-slate-100 text-slate-600 border-slate-200', barColor: 'bg-slate-500' }
+];
+
+const isFormalEmployeeType = (type) => type === 'formal' || type === 'formalA' || type === 'formalB';
+
+// 依上課時數換算運動員專案對應之正常課程原價（教練抽成基準，優惠由公司吸收）
+const getAthleteOriginalPrice = (classDuration) => {
+  const match = typeof classDuration === 'string' ? classDuration.match(/(\d+)min/) : null;
+  const mins = match ? Number(match[1]) : 90;
+  if (mins <= 30) return 900;
+  if (mins === 60) return 1800;
+  if (mins === 90) return 2500;
+  if (mins === 120) return 3400;
+  if (mins === 150) return 4300;
+  if (mins > 90) return 2500 + Math.round(((mins - 90) / 30) * 900);
+  return Math.round((mins / 60) * 1800);
+};
+
 const formatClasses = (num) => Number.isInteger(num) ? num : Number(num.toFixed(1));
 
 const getCoachTypeLabel = (type) => {
@@ -187,6 +213,12 @@ const App = () => {
   const [summaryMonth, setSummaryMonth] = useState(getLocalMonthString());
   const [syncStatus, setSyncStatus] = useState('idle');
   const [importFeedback, setImportFeedback] = useState(null);
+  const [expenseFeedback, setExpenseFeedback] = useState(null);
+  const [eduSaveFeedback, setEduSaveFeedback] = useState(null);
+
+  // 正職年度進修補助額度設定（正式 A / 正式 B）
+  const [eduSubsidyConfig, setEduSubsidyConfig] = useState({ formalA: 0, formalB: 0 });
+  const [eduSubsidyForm, setEduSubsidyForm] = useState({ formalA: '0', formalB: '0' });
 
   const [logQueryType, setLogQueryType] = useState('date');
   const [logQueryDate, setLogQueryDate] = useState(getLocalDateString());
@@ -200,6 +232,7 @@ const App = () => {
   const [editingSalaryAdj, setEditingSalaryAdj] = useState(null);
   const [editingTask, setEditingTask] = useState(null);
   const [editingRecord, setEditingRecord] = useState(null);
+  const [editingLeave, setEditingLeave] = useState(null);
   const [confirmModal, setConfirmModal] = useState({ isOpen: false, type: 'danger', title: '', message: '', action: null });
   const [aiModal, setAiModal] = useState({ isOpen: false, title: '', content: '', isLoading: false });
   const [showPayslipModal, setShowPayslipModal] = useState(false);
@@ -222,7 +255,7 @@ const App = () => {
   });
 
   const [expenseData, setExpenseData] = useState({
-    employeeId: '', date: getLocalDateString(), item: '', amount: '', invoiceType: '電子發票', invoiceTypeOther: ''
+    employeeId: '', date: getLocalDateString(), category: '器材耗材', item: '', amount: '', invoiceType: '電子發票', invoiceTypeOther: ''
   });
   
   const [makeupData, setMakeupData] = useState({ date: getLocalDateString(), clockInTime: '', clockOutTime: '', reason: '' });
@@ -354,6 +387,7 @@ const App = () => {
     const adjRef = collection(db, 'artifacts', appId, 'public', 'data', 'salary_adjustments');
     const invRef = collection(db, 'artifacts', appId, 'public', 'data', 'inventory');
     const tasksRef = collection(db, 'artifacts', appId, 'public', 'data', 'tasks');
+    const eduSettingsRef = doc(db, 'artifacts', appId, 'public', 'data', 'system_settings', 'education_subsidy');
     
     let loadedCount = 0;
     const checkLoaded = () => { loadedCount++; if (loadedCount >= 3) setIsDataLoaded(true); };
@@ -367,8 +401,17 @@ const App = () => {
     const unsubAdj = onSnapshot(adjRef, (s) => { setMonthlyAdjustments(s.docs.map(d => ({ id: d.id, ...d.data() }))); }, (err) => console.error(err));
     const unsubInv = onSnapshot(invRef, (s) => { setInventoryData(s.docs.map(d => ({ id: d.id, ...d.data() }))); }, (err) => console.error(err));
     const unsubTasks = onSnapshot(tasksRef, (s) => { setTasks(s.docs.map(d => ({ id: d.id, ...d.data() }))); }, (err) => console.error(err));
+    const unsubEdu = onSnapshot(eduSettingsRef, (snap) => {
+      if (snap.exists()) {
+        const data = snap.data();
+        const fA = Number(data.formalA) || 0;
+        const fB = Number(data.formalB) || 0;
+        setEduSubsidyConfig({ formalA: fA, formalB: fB });
+        setEduSubsidyForm({ formalA: String(fA), formalB: String(fB) });
+      }
+    }, (err) => console.error(err));
     
-    return () => { unsubEmp(); unsubLog(); unsubCust(); unsubAtt(); unsubLeave(); unsubExp(); unsubAdj(); unsubInv(); unsubTasks(); };
+    return () => { unsubEmp(); unsubLog(); unsubCust(); unsubAtt(); unsubLeave(); unsubExp(); unsubAdj(); unsubInv(); unsubTasks(); unsubEdu(); };
   }, [user]);
 
   useEffect(() => {
@@ -456,17 +499,17 @@ const App = () => {
       classPay = 500;
     } else if (log.classDuration === 'athlete_buy') {
       classPay = 0;
-    } else if (isNewAthlete) {
-      classPay = rawClsCount * 250;
-    } else if (isOldAthlete) {
-      classPay = rawClsCount * 750;
     } else {
+        // 運動員專案比照正常課程原價計算教練抽成（60m=$1800、90m=$2500、120m=$3400），優惠由公司吸收
         const X = log.specialEventType?.startsWith('出差任務') ? 2500 : (
-            log.classFee ? Number(log.classFee) : (
-                log.classDuration === '150min' ? 4300 :
-                log.classDuration === '120min' ? 3400 :
-                log.classDuration === '60min' || log.classDuration === 'overtime60min' ? 1800 : 
-                log.classDuration === 'overtime30min' ? 900 : 2500
+            isAthlete ? getAthleteOriginalPrice(log.classDuration) : (
+                log.classFee ? Number(log.classFee) : (
+                    log.classDuration === '2p_120min' ? 4000 :
+                    log.classDuration === '150min' ? 4300 :
+                    log.classDuration === '120min' ? 3400 :
+                    log.classDuration === '60min' || log.classDuration === 'overtime60min' ? 1800 : 
+                    log.classDuration === 'overtime30min' ? 900 : 2500
+                )
             )
         ); 
         
@@ -624,6 +667,7 @@ const App = () => {
             classRev = Number(log.classes) * 750;
         } else {
             const X = log.classFee ? Number(log.classFee) : (
+                log.classDuration === '2p_120min' ? 4000 :
                 log.classDuration === '150min' ? 4300 :
                 log.classDuration === '120min' ? 3400 :
                 log.classDuration === '60min' || log.classDuration === 'overtime60min' ? 1800 : 
@@ -696,6 +740,7 @@ const App = () => {
             logRev = Number(log.classes) * 750;
         } else {
             const X = log.classFee ? Number(log.classFee) : (
+                log.classDuration === '2p_120min' ? 4000 :
                 log.classDuration === '150min' ? 4300 :
                 log.classDuration === '120min' ? 3400 :
                 log.classDuration === '60min' || log.classDuration === 'overtime60min' ? 1800 : 
@@ -856,6 +901,7 @@ const App = () => {
             classCashRev = classes * 750;
         } else {
             const X = log.classFee ? Number(log.classFee) : (
+                log.classDuration === '2p_120min' ? 4000 :
                 log.classDuration === '150min' ? 4300 :
                 log.classDuration === '120min' ? 3400 :
                 log.classDuration === '60min' || log.classDuration === 'overtime60min' ? 1800 : 
@@ -1024,9 +1070,51 @@ const App = () => {
     const companyVatPayable = finalTotalRevenue - companyNetRevenue;
     const companyGrossProfit = companyNetRevenue - totalPayrollCorpCost;
     
-    const approvedExpensesTotal = expenses
-      .filter(e => e.status === 'approved' && (!filterStartDate || e.date >= filterStartDate) && (!filterEndDate || e.date <= filterEndDate))
+    const rangeExpenses = expenses.filter(e => (!filterStartDate || e.date >= filterStartDate) && (!filterEndDate || e.date <= filterEndDate));
+    const approvedExpensesList = rangeExpenses.filter(e => e.status === 'approved');
+    const pendingExpensesList = rangeExpenses.filter(e => e.status === 'pending');
+
+    const approvedExpensesTotal = approvedExpensesList.reduce((sum, e) => sum + Number(e.amount || 0), 0);
+    const pendingExpensesTotal = pendingExpensesList.reduce((sum, e) => sum + Number(e.amount || 0), 0);
+    const approvedEduExpensesTotal = approvedExpensesList
+      .filter(e => e.category === '進修補助')
       .reduce((sum, e) => sum + Number(e.amount || 0), 0);
+
+    // 依請款分類統計區間已核准花費
+    const expenseByCategoryMap = {};
+    approvedExpensesList.forEach(exp => {
+      const cat = exp.category || '其他雜支';
+      if (!expenseByCategoryMap[cat]) {
+        expenseByCategoryMap[cat] = { category: cat, amount: 0, count: 0 };
+      }
+      expenseByCategoryMap[cat].amount += Number(exp.amount || 0);
+      expenseByCategoryMap[cat].count += 1;
+    });
+    const expenseByCategory = Object.values(expenseByCategoryMap).sort((a, b) => b.amount - a.amount);
+
+    // 依員工統計區間已核准請款花費
+    const expenseByEmployeeMap = {};
+    approvedExpensesList.forEach(exp => {
+      const eId = exp.employeeId;
+      if (!expenseByEmployeeMap[eId]) {
+        const empObj = employees.find(em => em.id === eId);
+        expenseByEmployeeMap[eId] = {
+          employeeId: eId,
+          name: empObj?.name || '未知員工',
+          type: empObj?.type || '',
+          total: 0,
+          eduAmount: 0,
+          otherAmount: 0,
+          count: 0
+        };
+      }
+      const amt = Number(exp.amount || 0);
+      expenseByEmployeeMap[eId].total += amt;
+      expenseByEmployeeMap[eId].count += 1;
+      if (exp.category === '進修補助') expenseByEmployeeMap[eId].eduAmount += amt;
+      else expenseByEmployeeMap[eId].otherAmount += amt;
+    });
+    const expenseByEmployee = Object.values(expenseByEmployeeMap).sort((a, b) => b.total - a.total);
 
     const totalOpCosts = (Object.values(operatingCosts).reduce((sum, val) => sum + Number(val || 0), 0) * monthDiff) + approvedExpensesTotal;
     const companyOperatingProfit = companyGrossProfit - totalOpCosts;
@@ -1039,6 +1127,8 @@ const App = () => {
       totalPayrollCorpCost, companyGrossProfit, totalOpCosts, companyOperatingProfit,
       companyEstimatedIncomeTax, companyNetIncome, totalClassesGlobal, paymentMethodsCounts,
       paymentMethodsAmounts, athleteProjectClasses, athleteProjectRevenue, approvedExpensesTotal,
+      pendingExpensesTotal, pendingExpensesCount: pendingExpensesList.length, approvedEduExpensesTotal,
+      approvedExpensesList, expenseByCategory, expenseByEmployee,
       activeCoaches: payroll.filter(p => p.totalClasses > 0 || p.grossPay > 0).length,
       filteredRecordCount: validLogs.length
     };
@@ -1192,6 +1282,7 @@ const App = () => {
         customerName: finalCustomerName,
         classDuration: logData.classDuration || '90min',
         classFee: logData.classDuration?.startsWith('athlete_') ? 250 : (
+            logData.classDuration === '2p_120min' ? 4000 :
             logData.classDuration === '150min' ? 4300 :
             logData.classDuration === '120min' ? 3400 :
             logData.classDuration === '60min' || logData.classDuration === 'overtime60min' ? 1800 : 
@@ -1499,6 +1590,7 @@ const App = () => {
       let projectInfo = row.specialEventType ? row.specialEventType :
                         row.classDuration === 'athlete_buy' ? '儲值' :
                         row.classDuration?.startsWith('athlete_') ? `運動員專案` :
+                        row.classDuration === '2p_120min' ? '2人 120 min 課程' :
                         row.classDuration === '150min' ? '150 min 課程' :
                         row.classDuration === '120min' ? '120 min 課程' :
                         row.classDuration === 'overtime30min' ? '加時 30 min (歷史)' :
@@ -2009,10 +2101,108 @@ const App = () => {
     });
   };
 
+  // 管理端修改已送出或已核准假單（轉換假別、調整時數或變更簽核狀態，並自動重算薪資與假勤額度）
+  const handleUpdateLeave = async (e) => {
+    e.preventDefault();
+    if (!editingLeave) return;
+    triggerSync(async () => {
+      await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'leaves', editingLeave.id), {
+        date: editingLeave.date,
+        type: editingLeave.type,
+        hours: Number(editingLeave.hours) || 0,
+        reason: editingLeave.reason || '',
+        status: editingLeave.status || 'approved',
+        updatedAt: new Date().toISOString()
+      });
+      setEditingLeave(null);
+    });
+  };
+
+  const handleDeleteLeave = (leave) => {
+    setConfirmModal({
+      isOpen: true,
+      type: 'danger',
+      title: '刪除假單紀錄',
+      message: '確定要永久刪除此筆假單嗎？刪除後系統將自動重新計算當月薪資扣款與特休／補休餘額。',
+      action: async () => {
+        triggerSync(async () => {
+          await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'leaves', leave.id));
+          setEditingLeave(null);
+        });
+      }
+    });
+  };
+
+  // 計算特定員工於指定年度的進修補助額度與剩餘額度（含已核准與審核中申請）
+  const getEmployeeEduSubsidyStatus = (empId, yearStr) => {
+    const emp = employees.find(e => e.id === empId);
+    if (!emp || !isFormalEmployeeType(emp.type)) {
+      return { eligible: false, annualLimit: 0, approvedAmount: 0, pendingAmount: 0, usedAmount: 0, remainingAmount: 0, typeLabel: emp ? getCoachTypeLabel(emp.type) : '' };
+    }
+    const targetYear = (yearStr || getLocalDateString()).slice(0, 4);
+    const annualLimit = emp.type === 'formalB' ? (Number(eduSubsidyConfig.formalB) || 0) : (Number(eduSubsidyConfig.formalA) || 0);
+    const yearEduExpenses = expenses.filter(
+      e => e.employeeId === empId && e.category === '進修補助' && e.date?.startsWith(targetYear) && e.status !== 'rejected'
+    );
+    const approvedAmount = yearEduExpenses.filter(e => e.status === 'approved').reduce((sum, e) => sum + Number(e.amount || 0), 0);
+    const pendingAmount = yearEduExpenses.filter(e => e.status === 'pending').reduce((sum, e) => sum + Number(e.amount || 0), 0);
+    const usedAmount = approvedAmount + pendingAmount;
+    const remainingAmount = Math.max(0, annualLimit - usedAmount);
+    return {
+      eligible: true,
+      year: targetYear,
+      typeLabel: getCoachTypeLabel(emp.type),
+      annualLimit,
+      approvedAmount,
+      pendingAmount,
+      usedAmount,
+      remainingAmount
+    };
+  };
+
+  // 管理端儲存正式 A / 正式 B 年度進修補助額度
+  const handleSaveEduSubsidyConfig = async (e) => {
+    e.preventDefault();
+    const fA = Math.max(0, Number(eduSubsidyForm.formalA) || 0);
+    const fB = Math.max(0, Number(eduSubsidyForm.formalB) || 0);
+    triggerSync(async () => {
+      await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'system_settings', 'education_subsidy'), {
+        formalA: fA,
+        formalB: fB,
+        updatedAt: new Date().toISOString()
+      });
+      setEduSaveFeedback({ type: 'success', text: `已儲存年度進修補助額度：正式 A $${fA.toLocaleString()} / 正式 B $${fB.toLocaleString()}` });
+      setTimeout(() => setEduSaveFeedback(null), 4000);
+    });
+  };
+
   const handleApplyExpense = async (e) => {
     e.preventDefault();
     const submitterId = userRole === 'boss' ? expenseData.employeeId : loggedInCoachId;
-    if (!submitterId || !expenseData.item || !expenseData.amount) return;
+    if (!submitterId || !expenseData.item?.trim() || !expenseData.amount) return;
+
+    const reqAmount = Number(expenseData.amount) || 0;
+    if (reqAmount <= 0) {
+      setExpenseFeedback({ type: 'error', text: '請輸入大於 0 的請款金額。' });
+      return;
+    }
+
+    const selectedCategory = expenseData.category || '其他雜支';
+    if (selectedCategory === '進修補助') {
+      const eduStatus = getEmployeeEduSubsidyStatus(submitterId, expenseData.date);
+      if (!eduStatus.eligible) {
+        setExpenseFeedback({ type: 'error', text: '「進修補助」僅限正職員工（正式 A / 正式 B）申請。' });
+        return;
+      }
+      if (eduStatus.annualLimit <= 0) {
+        setExpenseFeedback({ type: 'error', text: `管理端尚未設定「${eduStatus.typeLabel}」的年度進修補助額度，請先聯繫主管設定。` });
+        return;
+      }
+      if (reqAmount > eduStatus.remainingAmount) {
+        setExpenseFeedback({ type: 'error', text: `申請金額 $${reqAmount.toLocaleString()} 超過 ${eduStatus.year} 年度剩餘進修補助額度（剩餘 $${eduStatus.remainingAmount.toLocaleString()}）。` });
+        return;
+      }
+    }
     
     const finalInvoiceType = expenseData.invoiceType === '其他' ? expenseData.invoiceTypeOther : expenseData.invoiceType;
 
@@ -2020,14 +2210,21 @@ const App = () => {
       await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'expenses'), {
         employeeId: submitterId,
         date: expenseData.date,
-        item: expenseData.item,
-        amount: Number(expenseData.amount),
+        category: selectedCategory,
+        item: expenseData.item.trim(),
+        amount: reqAmount,
         invoiceType: finalInvoiceType,
         status: 'pending',
         createdAt: new Date().toISOString()
       });
-      setExpenseData({ employeeId: '', date: getLocalDateString(), item: '', amount: '', invoiceType: '電子發票', invoiceTypeOther: '' });
-      alert("請款單已送出！等待簽核中。");
+      setExpenseData(prev => ({ ...prev, date: getLocalDateString(), category: selectedCategory === '進修補助' ? '進修補助' : '器材耗材', item: '', amount: '', invoiceType: '電子發票', invoiceTypeOther: '' }));
+      setExpenseFeedback({
+        type: 'success',
+        text: selectedCategory === '進修補助'
+          ? `進修補助請款單（$${reqAmount.toLocaleString()}）已送出！上方已即時更新您的年度剩餘額度。`
+          : '請款單已送出！等待主管簽核中。'
+      });
+      setTimeout(() => setExpenseFeedback(null), 5000);
     });
   };
 
@@ -2724,7 +2921,7 @@ const App = () => {
                        <h2 className="text-3xl text-slate-800 flex items-center gap-4 tracking-tighter"><CalendarOff className="text-amber-500" size={32} /> 假單簽核管理</h2>
                     </div>
                     <div className="space-y-4">
-                       {leaveRecords.sort((a,b) => b.createdAt.localeCompare(a.createdAt)).map(leave => {
+                       {[...leaveRecords].sort((a,b) => (b.createdAt || '').localeCompare(a.createdAt || '')).map(leave => {
                          const emp = employees.find(e => e.id === leave.employeeId);
                          if (!emp) return null;
                          const lType = LEAVE_TYPES[leave.type] || LEAVE_TYPES.personal;
@@ -2745,7 +2942,7 @@ const App = () => {
                                </div>
                              </div>
                              
-                             <div className="flex gap-2 justify-end shrink-0">
+                             <div className="flex flex-wrap gap-2 justify-end items-center shrink-0">
                                {leave.status === 'pending' ? (
                                   <>
                                     <button onClick={() => handleLeaveApproval(leave.id, 'rejected')} className="px-4 py-2 bg-rose-50 text-rose-600 rounded-xl font-black text-xs hover:bg-rose-100 flex items-center gap-1 border border-rose-200"><XSquare size={14}/> 退回</button>
@@ -2756,6 +2953,13 @@ const App = () => {
                                      {leave.status === 'approved' ? '已核准 (連動薪資)' : '已退回'}
                                   </span>
                                )}
+                               <button
+                                 onClick={() => setEditingLeave({ ...leave, employeeName: emp.name })}
+                                 className="px-3 py-2 bg-white text-slate-500 hover:text-amber-600 hover:border-amber-300 rounded-xl font-black text-xs border border-slate-200 flex items-center gap-1 transition shadow-sm"
+                                 title="轉換假別或修改假單"
+                               >
+                                 <Edit2 size={14} /> 轉假別/修改
+                               </button>
                              </div>
                            </div>
                          )
@@ -2924,33 +3128,108 @@ const App = () => {
 
         {activeTab === 'expenses' && (
           <div className="animate-in fade-in duration-300 font-black">
+            {(() => {
+              const targetEmpId = userRole === 'boss' ? expenseData.employeeId : loggedInCoachId;
+              const targetEmp = employees.find(e => e.id === targetEmpId);
+              const targetIsFormal = targetEmp && isFormalEmployeeType(targetEmp.type);
+              const eduStatus = targetEmpId ? getEmployeeEduSubsidyStatus(targetEmpId, expenseData.date) : null;
+              const reqAmt = Number(expenseData.amount) || 0;
+              const previewRemaining = eduStatus ? Math.max(0, eduStatus.remainingAmount - reqAmt) : 0;
+              const isExceedingEdu = expenseData.category === '進修補助' && eduStatus?.eligible && reqAmt > eduStatus.remainingAmount;
+
+              return (
             <div className="grid grid-cols-1 xl:grid-cols-2 gap-8">
                <div className="bg-white p-10 rounded-[3rem] shadow-xl border border-slate-200">
-                 <div className="flex items-center gap-4 mb-8">
+                 <div className="flex items-center gap-4 mb-6">
                    <div className="p-4 bg-indigo-50 text-indigo-600 rounded-2xl"><Receipt size={28} /></div>
                    <div>
                      <h2 className="text-2xl text-slate-800 tracking-tighter">新增請款單</h2>
-                     <p className="text-[10px] text-slate-400 uppercase tracking-widest mt-1">代墊費用、店內活動開銷報帳申請</p>
+                     <p className="text-[10px] text-slate-400 uppercase tracking-widest mt-1">分類請款、正職進修補助與代墊報帳申請</p>
                    </div>
                  </div>
+
+                 {/* 正職員工年度進修補助額度即時看板 */}
+                 {eduStatus?.eligible && (
+                   <div className="mb-6 p-6 rounded-[2rem] bg-gradient-to-br from-indigo-600 to-violet-600 text-white shadow-lg relative overflow-hidden">
+                     <div className="flex justify-between items-start mb-4">
+                       <div>
+                         <span className="text-[10px] bg-white/20 px-2.5 py-1 rounded-full tracking-widest uppercase">
+                           {eduStatus.year} 年度進修補助額度 • {targetEmp?.name} ({eduStatus.typeLabel})
+                         </span>
+                         <div className="mt-3 flex items-baseline gap-2">
+                           <span className="text-xs text-indigo-100">剩餘可用</span>
+                           <span className="text-4xl font-mono font-black tracking-tighter">${eduStatus.remainingAmount.toLocaleString()}</span>
+                         </div>
+                       </div>
+                       <div className="text-right text-xs font-mono text-indigo-100 space-y-1">
+                         <div>年度額度：${eduStatus.annualLimit.toLocaleString()}</div>
+                         <div>已申請：${eduStatus.usedAmount.toLocaleString()}</div>
+                         {eduStatus.pendingAmount > 0 && <div className="text-amber-300">(含審核中 ${eduStatus.pendingAmount.toLocaleString()})</div>}
+                       </div>
+                     </div>
+                     <div className="w-full h-2.5 bg-white/20 rounded-full overflow-hidden">
+                       <div
+                         className="h-full bg-amber-300 transition-all duration-300 rounded-full"
+                         style={{ width: `${eduStatus.annualLimit > 0 ? Math.min(100, Math.round((eduStatus.usedAmount / eduStatus.annualLimit) * 100)) : 0}%` }}
+                       ></div>
+                     </div>
+                     {eduStatus.annualLimit === 0 && (
+                       <p className="text-[11px] text-amber-200 mt-3 flex items-center gap-1">
+                         <Info size={13} /> 管理端尚未設定 {eduStatus.typeLabel} 年度額度，請由老闆至「教練管理」設定。
+                       </p>
+                     )}
+                   </div>
+                 )}
+
+                 {expenseFeedback && (
+                   <div className={`mb-5 p-4 rounded-2xl border text-xs font-black flex items-center justify-between ${expenseFeedback.type === 'success' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-rose-50 text-rose-700 border-rose-200'}`}>
+                     <span>{expenseFeedback.text}</span>
+                     <button type="button" onClick={() => setExpenseFeedback(null)} className="opacity-60 hover:opacity-100"><X size={15}/></button>
+                   </div>
+                 )}
+
                  <form onSubmit={handleApplyExpense} className="space-y-5">
                    {userRole === 'boss' ? (
                      <div className="space-y-1">
                        <label className="text-[10px] text-slate-400 uppercase">申請人 (代為輸入)</label>
-                       <select required className="w-full bg-slate-50 border border-slate-200 rounded-2xl p-3 text-sm font-black outline-none" value={expenseData.employeeId} onChange={e => setExpenseData({...expenseData, employeeId: e.target.value})}>
+                       <select required className="w-full bg-slate-50 border border-slate-200 rounded-2xl p-3 text-sm font-black outline-none" value={expenseData.employeeId} onChange={e => {
+                         const nextId = e.target.value;
+                         const nextEmp = employees.find(em => em.id === nextId);
+                         const canUseEdu = nextEmp && isFormalEmployeeType(nextEmp.type);
+                         setExpenseData(prev => ({
+                           ...prev,
+                           employeeId: nextId,
+                           category: (!canUseEdu && prev.category === '進修補助') ? '器材耗材' : prev.category
+                         }));
+                         setExpenseFeedback(null);
+                       }}>
                          <option value="">-- 選擇請款人 --</option>
-                         {employees.map(e => <option key={e.id} value={e.id}>{e.name}</option>)}
+                         {employees.map(e => <option key={e.id} value={e.id}>{e.name} ({getCoachTypeLabel(e.type)})</option>)}
                        </select>
                      </div>
                    ) : null}
-                   <div className="space-y-1">
-                     <label className="text-[10px] text-slate-400 uppercase">消費/發生日期</label>
-                     <input type="date" required className="w-full bg-slate-50 border border-slate-200 rounded-2xl p-3 text-sm font-black outline-none" value={expenseData.date} onChange={e => setExpenseData({...expenseData, date: e.target.value})} />
+
+                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                     <div className="space-y-1">
+                       <label className="text-[10px] text-slate-400 uppercase">消費/發生日期</label>
+                       <input type="date" required className="w-full bg-slate-50 border border-slate-200 rounded-2xl p-3 text-sm font-black outline-none font-mono" value={expenseData.date} onChange={e => setExpenseData({...expenseData, date: e.target.value})} />
+                     </div>
+                     <div className="space-y-1">
+                       <label className="text-[10px] text-slate-400 uppercase">常見請款項目分類</label>
+                       <select required className="w-full bg-slate-50 border border-slate-200 rounded-2xl p-3 text-sm font-black outline-none focus:border-indigo-400" value={expenseData.category} onChange={e => { setExpenseData({...expenseData, category: e.target.value}); setExpenseFeedback(null); }}>
+                         {EXPENSE_CATEGORIES.map(cat => {
+                           if (cat.formalOnly && !targetIsFormal) return null;
+                           return <option key={cat.id} value={cat.id}>{cat.label}</option>;
+                         })}
+                       </select>
+                     </div>
                    </div>
+
                    <div className="space-y-1">
-                     <label className="text-[10px] text-slate-400 uppercase">請款項目 / 說明</label>
-                     <input type="text" required placeholder="例如：購買飲水機濾心、學員活動點心..." className="w-full bg-slate-50 border border-slate-200 rounded-2xl p-3 text-sm font-black outline-none" value={expenseData.item} onChange={e => setExpenseData({...expenseData, item: e.target.value})} />
+                     <label className="text-[10px] text-slate-400 uppercase">詳細補充細節 (品項 / 課程名稱 / 用途說明)</label>
+                     <textarea required rows={3} placeholder={expenseData.category === '進修補助' ? '請填寫進修課程名稱、主辦單位、上課日期等細節...' : '請詳細補充消費品項、數量與用途說明（例如：購買飲水機濾心 2 支、學員講座點心）...'} className="w-full bg-slate-50 border border-slate-200 rounded-2xl p-3 text-sm font-black outline-none focus:border-indigo-400 resize-none" value={expenseData.item} onChange={e => setExpenseData({...expenseData, item: e.target.value})} />
                    </div>
+
                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                      <div className="space-y-1">
                        <label className="text-[10px] text-slate-400 uppercase">發票 / 憑證種類</label>
@@ -2958,6 +3237,7 @@ const App = () => {
                          <option value="電子發票">電子發票</option>
                          <option value="紙本發票">紙本發票</option>
                          <option value="收據">收據</option>
+                         <option value="研習/課程收據">研習/課程收據</option>
                          <option value="其他">其他 (自行填寫)</option>
                        </select>
                      </div>
@@ -2970,9 +3250,15 @@ const App = () => {
                    </div>
                    <div className="space-y-1">
                      <label className="text-[10px] text-slate-400 uppercase">金額 (元)</label>
-                     <input type="number" required placeholder="請輸入請款金額" className="w-full bg-slate-50 border border-slate-200 rounded-2xl p-3 text-xl text-indigo-600 font-black outline-none shadow-inner" value={expenseData.amount} onChange={e => setExpenseData({...expenseData, amount: e.target.value})} />
+                     <input type="number" required min="1" placeholder="請輸入請款金額" className={`w-full bg-slate-50 border rounded-2xl p-3 text-xl font-black outline-none shadow-inner ${isExceedingEdu ? 'border-rose-400 text-rose-600 bg-rose-50/40' : 'border-slate-200 text-indigo-600'}`} value={expenseData.amount} onChange={e => { setExpenseData({...expenseData, amount: e.target.value}); setExpenseFeedback(null); }} />
+                     {expenseData.category === '進修補助' && eduStatus?.eligible && reqAmt > 0 && (
+                       <div className={`text-xs mt-2 px-3 py-2 rounded-xl border flex justify-between items-center ${isExceedingEdu ? 'bg-rose-50 text-rose-600 border-rose-200' : 'bg-indigo-50 text-indigo-700 border-indigo-200'}`}>
+                         <span>{isExceedingEdu ? '⚠ 超過年度可用進修補助額度' : '本次申請後預估剩餘額度'}</span>
+                         <span className="font-mono font-black text-sm">{isExceedingEdu ? `超額 $${(reqAmt - eduStatus.remainingAmount).toLocaleString()}` : `$${previewRemaining.toLocaleString()}`}</span>
+                       </div>
+                     )}
                    </div>
-                   <button type="submit" className="w-full bg-indigo-600 text-white py-4 rounded-3xl font-black shadow-lg hover:bg-indigo-700 transition active:scale-95">送出請款</button>
+                   <button type="submit" disabled={isExceedingEdu} className="w-full bg-indigo-600 text-white py-4 rounded-3xl font-black shadow-lg hover:bg-indigo-700 transition active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed">送出請款</button>
                  </form>
                </div>
 
@@ -2980,24 +3266,28 @@ const App = () => {
                  <div className="flex justify-between items-center mb-8 border-b border-slate-100 pb-6">
                     <h2 className="text-2xl text-slate-800 flex items-center gap-4 tracking-tighter">請款紀錄與簽核</h2>
                  </div>
-                 <div className="space-y-4 max-h-[600px] overflow-y-auto pr-2">
-                    {expenses.filter(exp => userRole === 'boss' || exp.employeeId === loggedInCoachId).sort((a,b) => b.createdAt.localeCompare(a.createdAt)).map(exp => {
+                 <div className="space-y-4 max-h-[640px] overflow-y-auto pr-2">
+                    {expenses.filter(exp => userRole === 'boss' || exp.employeeId === loggedInCoachId).sort((a,b) => (b.createdAt || '').localeCompare(a.createdAt || '')).map(exp => {
                       const emp = employees.find(e => e.id === exp.employeeId);
                       if (!emp) return null;
+                      const catObj = EXPENSE_CATEGORIES.find(c => c.id === exp.category);
                       return (
                         <div key={exp.id} className={`p-5 rounded-3xl border flex flex-col md:flex-row md:items-center justify-between gap-4 transition-all ${exp.status === 'pending' ? 'bg-amber-50/30 border-amber-200 shadow-sm' : 'bg-slate-50 border-slate-100'}`}>
                            <div className="flex gap-4 items-start">
                              <div className="w-12 h-12 rounded-xl bg-slate-200 flex items-center justify-center text-xl font-black shrink-0">{emp.name[0]}</div>
                              <div>
-                               <div className="flex items-center gap-2 mb-1">
+                               <div className="flex items-center gap-2 mb-1 flex-wrap">
                                  <span className="text-lg font-black text-slate-800">{emp.name}</span>
-                                 <span className="text-sm font-mono text-indigo-600 font-black">${exp.amount.toLocaleString()}</span>
+                                 <span className={`text-[10px] px-2 py-0.5 rounded-lg border ${catObj ? catObj.color : 'bg-slate-100 text-slate-600 border-slate-200'}`}>
+                                   {exp.category || '其他雜支'}
+                                 </span>
+                                 <span className="text-sm font-mono text-indigo-600 font-black">${Number(exp.amount || 0).toLocaleString()}</span>
                                </div>
                                <div className="text-xs text-slate-500 font-black mb-1 flex gap-2 items-center flex-wrap">
                                   <span className="font-mono bg-slate-200 px-1.5 py-0.5 rounded text-slate-600">{exp.date}</span> 
                                   {exp.invoiceType && <span className="bg-sky-50 text-sky-600 px-1.5 py-0.5 rounded border border-sky-100">{exp.invoiceType}</span>}
-                                  <span>{exp.item}</span>
                                </div>
+                               <p className="text-xs text-slate-600 font-sans mt-1 whitespace-pre-wrap">{exp.item}</p>
                              </div>
                            </div>
                            
@@ -3026,6 +3316,8 @@ const App = () => {
                  </div>
                </div>
             </div>
+              );
+            })()}
           </div>
         )}
 
@@ -3234,21 +3526,27 @@ const App = () => {
                   )}
                   
                   {activeTab === 'athlete' && athleteMode === 'deduct' && (
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4 font-mono">
-                      <input type="text" placeholder="時段 (例 14:00)" className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 shadow-inner text-sm font-black outline-none" value={logData.sessionTime} onChange={(e) => setLogData({...logData, sessionTime: e.target.value})} />
-                      <div className="w-full md:col-span-2 flex gap-2">
-                        <div className="relative flex-1">
-                          <input type="number" step="30" min="30" placeholder="上課分鐘數" className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 shadow-inner text-sm font-black outline-none text-amber-600 pl-14" value={logData.classDuration?.startsWith('athlete_') ? logData.classDuration.split('_')[1].replace('min','') : '90'} onChange={(e) => {
-                              const mins = e.target.value;
-                              const pts = Math.max(1, Math.floor(Number(mins) / 30)).toString();
-                              setLogData({...logData, classDuration: `athlete_${mins}min`, classes: pts});
-                          }} />
-                          <span className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 text-xs font-black">時間</span>
-                        </div>
-                        <div className="w-1/3 bg-slate-100 border border-slate-200 rounded-xl p-3 shadow-inner text-sm font-black text-amber-700 flex items-center justify-center">
-                          扣 {logData.classes} 點
+                    <div className="space-y-2">
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 font-mono">
+                        <input type="text" placeholder="時段 (例 14:00)" className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 shadow-inner text-sm font-black outline-none" value={logData.sessionTime} onChange={(e) => setLogData({...logData, sessionTime: e.target.value})} />
+                        <div className="w-full md:col-span-2 flex gap-2">
+                          <div className="relative flex-1">
+                            <input type="number" step="30" min="30" placeholder="上課分鐘數" className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 shadow-inner text-sm font-black outline-none text-amber-600 pl-14" value={logData.classDuration?.startsWith('athlete_') ? logData.classDuration.split('_')[1].replace('min','') : '90'} onChange={(e) => {
+                                const mins = e.target.value;
+                                const pts = Math.max(1, Math.floor(Number(mins) / 30)).toString();
+                                setLogData({...logData, classDuration: `athlete_${mins}min`, classes: pts});
+                            }} />
+                            <span className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 text-xs font-black">時間</span>
+                          </div>
+                          <div className="w-1/3 bg-slate-100 border border-slate-200 rounded-xl p-3 shadow-inner text-sm font-black text-amber-700 flex items-center justify-center">
+                            扣 {logData.classes} 點
+                          </div>
                         </div>
                       </div>
+                      <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200/70 rounded-xl px-3 py-2 flex items-center justify-between">
+                        <span>教練抽成基準：依各職位比例按原價計算（優惠由公司吸收）</span>
+                        <span className="font-mono font-black">${getAthleteOriginalPrice(logData.classDuration).toLocaleString()}</span>
+                      </p>
                     </div>
                   )}
 
@@ -3259,6 +3557,7 @@ const App = () => {
                         <option value="90min">90 min 課程 ($2500)</option>
                         <option value="60min">60 min 課程 ($1800)</option>
                         <option value="120min">120 min 課程 ($3400)</option>
+                        <option value="2p_120min">2人 120 min 課程 ($4000)</option>
                         <option value="150min">150 min 課程 ($4300)</option>
                       </select>
                       {logData.employeeId === 'COMPANY_REVENUE' || isFormActivityProject ? (
@@ -3473,6 +3772,7 @@ const App = () => {
                                   classCashRev = Number(log.classes) * 750;
                               } else {
                                   const X = log.classFee ? Number(log.classFee) : (
+                                      log.classDuration === '2p_120min' ? 4000 :
                                       log.classDuration === '150min' ? 4300 :
                                       log.classDuration === '120min' ? 3400 :
                                       log.classDuration === '60min' || log.classDuration === 'overtime60min' ? 1800 : 
@@ -3502,6 +3802,7 @@ const App = () => {
                                       {(log.classDuration?.startsWith('athlete_') && log.classDuration !== 'athlete_buy') && <span className="text-amber-600 font-black">({log.classDuration.split('_')[1]})</span>}
                                       {log.classDuration === '60min' && <span className="text-indigo-500 font-black">60m</span>}
                                       {log.classDuration === '120min' && <span className="text-indigo-500 font-black">120m</span>}
+                                      {log.classDuration === '2p_120min' && <span className="text-indigo-500 font-black">2人120m</span>}
                                       {log.classDuration === '150min' && <span className="text-indigo-500 font-black">150m</span>}
                                       {log.classDuration === 'overtime30min' && <span className="text-rose-500 font-black">加時30m(舊)</span>}
                                       {log.classDuration === 'overtime60min' && <span className="text-rose-500 font-black">加時60m(舊)</span>}
@@ -3638,6 +3939,7 @@ const App = () => {
                             {row.specialEventType ? row.specialEventType :
                              row.classDuration === 'athlete_buy' ? '運動員儲值' :
                              row.classDuration?.startsWith('athlete_') ? `運動員專案 (${row.classDuration.split('_')[1]})` :
+                             row.classDuration === '2p_120min' ? '2人 120 min 課程' :
                              row.classDuration === 'overtime30min' ? '加時 30 min (歷史)' :
                              row.classDuration === 'overtime60min' ? '加時 60 min (歷史)' :
                              `一般課程 (${row.classDuration})`}
@@ -3884,6 +4186,37 @@ const App = () => {
                 </form>
              </div>
 
+             {/* 正職年度進修補助額度設定面板 */}
+             <div className="bg-white p-10 rounded-[3.5rem] shadow-sm border border-indigo-200 font-sans">
+               <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-6">
+                 <div>
+                   <h3 className="text-2xl font-black flex items-center gap-3 text-slate-800 tracking-tighter">
+                     <Sparkles size={26} className="text-indigo-600" /> 正職年度進修補助額度設定
+                   </h3>
+                   <p className="text-xs text-slate-400 mt-1">依照「正式 A」與「正式 B」分別設定每年固定補助上限，正職員工於「請款報帳」申請進修補助時將自動扣抵並顯示剩餘額度。</p>
+                 </div>
+               </div>
+               {eduSaveFeedback && (
+                 <div className="mb-5 p-4 rounded-2xl border bg-emerald-50 text-emerald-700 border-emerald-200 text-xs font-black flex items-center justify-between">
+                   <span>{eduSaveFeedback.text}</span>
+                   <button type="button" onClick={() => setEduSaveFeedback(null)}><X size={15}/></button>
+                 </div>
+               )}
+               <form onSubmit={handleSaveEduSubsidyConfig} className="grid grid-cols-1 md:grid-cols-3 gap-4 items-end">
+                 <div className="bg-indigo-50/60 p-5 rounded-3xl border border-indigo-100 space-y-2">
+                   <label className="text-xs font-black text-indigo-700 uppercase tracking-widest block">正式 A 年度額度 (元/年)</label>
+                   <input type="number" min="0" required className="w-full bg-white border border-indigo-200 rounded-2xl px-4 py-3 text-xl font-mono font-black text-indigo-700 outline-none focus:ring-2 focus:ring-indigo-400" value={eduSubsidyForm.formalA} onChange={(e) => setEduSubsidyForm(prev => ({ ...prev, formalA: e.target.value }))} placeholder="例如 10000" />
+                 </div>
+                 <div className="bg-violet-50/60 p-5 rounded-3xl border border-violet-100 space-y-2">
+                   <label className="text-xs font-black text-violet-700 uppercase tracking-widest block">正式 B 年度額度 (元/年)</label>
+                   <input type="number" min="0" required className="w-full bg-white border border-violet-200 rounded-2xl px-4 py-3 text-xl font-mono font-black text-violet-700 outline-none focus:ring-2 focus:ring-violet-400" value={eduSubsidyForm.formalB} onChange={(e) => setEduSubsidyForm(prev => ({ ...prev, formalB: e.target.value }))} placeholder="例如 6000" />
+                 </div>
+                 <button type="submit" className="w-full bg-indigo-600 text-white py-5 px-6 rounded-3xl font-black text-base shadow-lg hover:bg-indigo-700 active:scale-95 transition flex items-center justify-center gap-2 h-fit">
+                   <Save size={20} /> 儲存補助額度
+                 </button>
+               </form>
+             </div>
+
              {/* 職位條件說明面板 */}
              <div className="bg-white p-10 rounded-[3.5rem] shadow-sm border border-slate-200 font-sans">
                <h3 className="text-2xl font-black mb-8 flex items-center gap-3 text-slate-800 tracking-tighter">
@@ -4020,6 +4353,7 @@ const App = () => {
                   { id: 'coach', label: '教練貢獻', icon: TrendingUp },
                   { id: 'customer', label: '資產餘額', icon: Users },
                   { id: 'inventory', label: '商品庫存', icon: ShoppingCart },
+                  { id: 'expenses_analysis', label: '請款花費分析', icon: Receipt },
                   { id: 'risk', label: '風控/對帳', icon: ShieldAlert }
                 ].map(t => (
                   <button key={t.id} onClick={() => setActiveFinanceTab(t.id)} className={`px-6 py-3 rounded-xl font-black text-xs transition-all flex items-center justify-center gap-2 whitespace-nowrap ${activeFinanceTab === t.id ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-500 hover:text-slate-700'}`}>
@@ -4325,6 +4659,156 @@ const App = () => {
               </div>
             )}
 
+            {activeFinanceTab === 'expenses_analysis' && (
+              <div className="space-y-8 animate-in fade-in font-black">
+                {/* 區間請款關鍵指標 */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+                  <div className="bg-white p-8 rounded-[2.5rem] shadow-sm border border-slate-200">
+                    <div className="text-[10px] text-slate-400 uppercase tracking-widest mb-2">區間已核准請款總額</div>
+                    <div className="text-3xl font-mono text-slate-800">${analyzedData.approvedExpensesTotal.toLocaleString()}</div>
+                    <div className="text-[10px] text-slate-400 mt-2">共 {analyzedData.approvedExpensesList.length} 筆已撥款</div>
+                  </div>
+                  <div className="bg-indigo-50 p-8 rounded-[2.5rem] shadow-sm border border-indigo-100">
+                    <div className="text-[10px] text-indigo-600 uppercase tracking-widest mb-2">區間進修補助支出</div>
+                    <div className="text-3xl font-mono text-indigo-700">${analyzedData.approvedEduExpensesTotal.toLocaleString()}</div>
+                    <div className="text-[10px] text-indigo-500 mt-2">
+                      佔請款總額 {analyzedData.approvedExpensesTotal > 0 ? Math.round((analyzedData.approvedEduExpensesTotal / analyzedData.approvedExpensesTotal) * 100) : 0}%
+                    </div>
+                  </div>
+                  <div className="bg-emerald-50 p-8 rounded-[2.5rem] shadow-sm border border-emerald-100">
+                    <div className="text-[10px] text-emerald-600 uppercase tracking-widest mb-2">區間店務 / 其他請款</div>
+                    <div className="text-3xl font-mono text-emerald-700">${(analyzedData.approvedExpensesTotal - analyzedData.approvedEduExpensesTotal).toLocaleString()}</div>
+                    <div className="text-[10px] text-emerald-500 mt-2">不含進修補助之營運雜支</div>
+                  </div>
+                  <div className="bg-amber-50 p-8 rounded-[2.5rem] shadow-sm border border-amber-200">
+                    <div className="text-[10px] text-amber-700 uppercase tracking-widest mb-2">區間待審核請款</div>
+                    <div className="text-3xl font-mono text-amber-700">${analyzedData.pendingExpensesTotal.toLocaleString()}</div>
+                    <div className="text-[10px] text-amber-600 mt-2">共 {analyzedData.pendingExpensesCount} 筆待簽核</div>
+                  </div>
+                </div>
+
+                {/* 分類花費佔比 + 正職年度進修額度總覽 */}
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                  <div className="bg-white p-10 rounded-[3rem] shadow-sm border border-slate-200">
+                    <h3 className="text-xl mb-8 flex items-center text-slate-800 tracking-tighter">
+                      <BarChart3 size={24} className="mr-3 text-indigo-600"/> 各請款項目分類花費分析
+                    </h3>
+                    <div className="space-y-6">
+                      {analyzedData.expenseByCategory.map(item => {
+                        const pct = analyzedData.approvedExpensesTotal > 0 ? Math.round((item.amount / analyzedData.approvedExpensesTotal) * 100) : 0;
+                        const catMeta = EXPENSE_CATEGORIES.find(c => c.id === item.category);
+                        return (
+                          <div key={item.category}>
+                            <div className="flex justify-between items-center text-sm mb-2">
+                              <span className="text-slate-700 flex items-center gap-2">
+                                <span className={`text-[10px] px-2 py-0.5 rounded-lg border ${catMeta ? catMeta.color : 'bg-slate-100 text-slate-600 border-slate-200'}`}>{item.category}</span>
+                                <span className="text-xs text-slate-400">({item.count} 筆)</span>
+                              </span>
+                              <span className="font-mono text-slate-800 text-base">${item.amount.toLocaleString()} <span className="text-xs text-slate-400">({pct}%)</span></span>
+                            </div>
+                            <div className="w-full bg-slate-100 rounded-full h-3 overflow-hidden">
+                              <div className={`${catMeta ? catMeta.barColor : 'bg-slate-500'} h-full rounded-full transition-all`} style={{ width: `${pct}%` }}></div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                      {analyzedData.expenseByCategory.length === 0 && (
+                        <p className="text-slate-400 text-sm text-center py-8 italic">此日期區間內尚無已核准的請款紀錄。</p>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* 正職員工年度進修補助使用狀況 */}
+                  <div className="bg-white p-10 rounded-[3rem] shadow-sm border border-slate-200">
+                    <div className="flex justify-between items-center mb-8">
+                      <h3 className="text-xl flex items-center text-slate-800 tracking-tighter">
+                        <Sparkles size={24} className="mr-3 text-violet-600"/> 正職年度進修補助使用率
+                      </h3>
+                      <span className="text-xs bg-violet-50 text-violet-700 border border-violet-200 px-3 py-1 rounded-xl font-mono">
+                        {(filterEndDate || getLocalDateString()).slice(0, 4)} 年度
+                      </span>
+                    </div>
+                    <div className="space-y-4 max-h-[360px] overflow-y-auto pr-2">
+                      {employees.filter(e => isFormalEmployeeType(e.type)).map(emp => {
+                        const status = getEmployeeEduSubsidyStatus(emp.id, filterEndDate || getLocalDateString());
+                        const usedPct = status.annualLimit > 0 ? Math.min(100, Math.round((status.usedAmount / status.annualLimit) * 100)) : 0;
+                        return (
+                          <div key={emp.id} className="p-4 bg-slate-50 rounded-2xl border border-slate-100">
+                            <div className="flex justify-between items-center mb-2">
+                              <div className="flex items-center gap-2">
+                                <span className="text-slate-800 text-sm">{emp.name}</span>
+                                <span className="text-[10px] bg-amber-100 text-amber-700 px-2 py-0.5 rounded">{status.typeLabel}</span>
+                              </div>
+                              <div className="text-xs font-mono text-slate-600">
+                                已申請 <span className="text-indigo-600 font-black">${status.usedAmount.toLocaleString()}</span> / ${status.annualLimit.toLocaleString()}
+                              </div>
+                            </div>
+                            <div className="w-full bg-slate-200 rounded-full h-2 overflow-hidden mb-1.5">
+                              <div className="bg-indigo-500 h-full rounded-full transition-all" style={{ width: `${usedPct}%` }}></div>
+                            </div>
+                            <div className="flex justify-between text-[10px] text-slate-400 font-mono">
+                              <span>使用率 {usedPct}% {status.pendingAmount > 0 ? `(含審核中 $${status.pendingAmount.toLocaleString()})` : ''}</span>
+                              <span className="text-emerald-600">剩餘 ${status.remainingAmount.toLocaleString()}</span>
+                            </div>
+                          </div>
+                        );
+                      })}
+                      {employees.filter(e => isFormalEmployeeType(e.type)).length === 0 && (
+                        <p className="text-slate-400 text-sm text-center py-8 italic">目前尚無正職員工資料。</p>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                {/* 區間已核准請款明細表 */}
+                <div className="bg-white rounded-[3rem] shadow-xl border border-slate-200 overflow-hidden">
+                  <div className="p-8 border-b border-slate-100 flex justify-between items-center">
+                    <h3 className="text-xl text-slate-800 flex items-center gap-3 tracking-tighter">
+                      <Receipt size={22} className="text-amber-600"/> 區間已核准請款明細
+                    </h3>
+                    <span className="text-xs text-slate-400 font-mono">共 {analyzedData.approvedExpensesList.length} 筆</span>
+                  </div>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left whitespace-nowrap text-xs">
+                      <thead className="bg-slate-50 text-[10px] text-slate-400 uppercase tracking-widest border-b border-slate-100">
+                        <tr>
+                          <th className="p-5">消費日期</th>
+                          <th className="p-5">申請人</th>
+                          <th className="p-5">請款分類</th>
+                          <th className="p-5">詳細說明</th>
+                          <th className="p-5">憑證種類</th>
+                          <th className="p-5 text-right">核准金額</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100 text-slate-700">
+                        {[...analyzedData.approvedExpensesList].sort((a, b) => (b.date || '').localeCompare(a.date || '')).map(exp => {
+                          const emp = employees.find(e => e.id === exp.employeeId);
+                          const catMeta = EXPENSE_CATEGORIES.find(c => c.id === exp.category);
+                          return (
+                            <tr key={exp.id} className="hover:bg-slate-50 transition-colors">
+                              <td className="p-5 font-mono text-slate-500">{exp.date}</td>
+                              <td className="p-5 text-slate-800">{emp?.name || '未知'}</td>
+                              <td className="p-5">
+                                <span className={`text-[10px] px-2.5 py-1 rounded-lg border ${catMeta ? catMeta.color : 'bg-slate-100 text-slate-600 border-slate-200'}`}>
+                                  {exp.category || '其他雜支'}
+                                </span>
+                              </td>
+                              <td className="p-5 font-sans text-slate-600 max-w-xs truncate" title={exp.item}>{exp.item}</td>
+                              <td className="p-5 text-sky-600">{exp.invoiceType || '-'}</td>
+                              <td className="p-5 text-right font-mono text-base text-indigo-600">${Number(exp.amount || 0).toLocaleString()}</td>
+                            </tr>
+                          );
+                        })}
+                        {analyzedData.approvedExpensesList.length === 0 && (
+                          <tr><td colSpan="6" className="p-10 text-center text-slate-400 italic">此區間無已核准之請款明細。</td></tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+            )}
+
             {activeFinanceTab === 'risk' && (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-8 font-black">
                 <div className="bg-white p-10 rounded-[3rem] shadow-sm border border-slate-200 flex flex-col justify-between">
@@ -4489,10 +4973,11 @@ const App = () => {
                              </div>
                            </div>
                        ) : (
-                           <select className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 font-black text-indigo-600" value={editingLog.classDuration || '90min'} onChange={(e) => setEditingLog({...editingLog, classDuration: e.target.value, classFee: e.target.value === '150min' ? 4300 : e.target.value === '120min' ? 3400 : (e.target.value === '60min' || e.target.value === 'overtime60min') ? 1800 : e.target.value === 'overtime30min' ? 900 : 2500})}>
+                           <select className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 font-black text-indigo-600" value={editingLog.classDuration || '90min'} onChange={(e) => setEditingLog({...editingLog, classDuration: e.target.value, classFee: e.target.value === '2p_120min' ? 4000 : e.target.value === '150min' ? 4300 : e.target.value === '120min' ? 3400 : (e.target.value === '60min' || e.target.value === 'overtime60min') ? 1800 : e.target.value === 'overtime30min' ? 900 : 2500})}>
                               <option value="90min">90 min 課程</option>
                               <option value="60min">60 min 課程</option>
                               <option value="120min">120 min 課程</option>
+                              <option value="2p_120min">2人 120 min 課程 ($4000)</option>
                               <option value="150min">150 min 課程</option>
                               {editingLog.classDuration === 'overtime30min' && <option value="overtime30min">加時 30 min (歷史)</option>}
                               {editingLog.classDuration === 'overtime60min' && <option value="overtime60min">加時 60 min (歷史)</option>}
@@ -4666,178 +5151,61 @@ const App = () => {
           </div>
         )}
 
-        {editingSalaryAdj && (
-          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[110] flex items-center justify-center p-4 font-black">
-            <div className="bg-white rounded-[3.5rem] w-full max-w-xl shadow-2xl p-10 relative border border-slate-200 font-sans">
-              <button onClick={() => setEditingSalaryAdj(null)} className="absolute top-8 right-8 text-slate-300 hover:text-slate-900 transition-all font-black"><X size={32} /></button>
-              <h3 className="text-2xl font-black mb-8 flex items-center gap-3 text-amber-600 uppercase tracking-widest"><DollarSign size={28} /> {editingSalaryAdj.coachName} - {editingSalaryAdj.month} 薪資加減項</h3>
-              <form onSubmit={async (e) => {
-                  e.preventDefault();
-                  triggerSync(async () => {
-                     const docId = `${editingSalaryAdj.coachId}_${editingSalaryAdj.month}`;
-                     await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'salary_adjustments', docId), {
-                        employeeId: editingSalaryAdj.coachId,
-                        month: editingSalaryAdj.month,
-                        professionalAllowance: Number(editingSalaryAdj.prof) || 0,
-                        projectBonus: Number(editingSalaryAdj.proj) || 0,
-                        managerAllowance: Number(editingSalaryAdj.mgr) || 0,
-                        otherAllowance: Number(editingSalaryAdj.other) || 0,
-                        supplementaryHealthIns: Number(editingSalaryAdj.supp) || 0,
-                        otherDeduction: Number(editingSalaryAdj.ded) || 0,
-                        updatedAt: new Date().toISOString()
-                     });
-                     setEditingSalaryAdj(null);
-                  });
-              }} className="space-y-6">
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-1 bg-indigo-50 p-3 rounded-xl border border-indigo-100">
-                    <p className="text-[10px] text-indigo-500 uppercase">專業加給 (+)</p>
-                    <input type="number" className="w-full bg-white border border-indigo-200 rounded-lg p-2 font-black outline-none text-indigo-700" value={editingSalaryAdj.prof} onChange={e => setEditingSalaryAdj({...editingSalaryAdj, prof: e.target.value})} />
-                  </div>
-                  <div className="space-y-1 bg-indigo-50 p-3 rounded-xl border border-indigo-100">
-                    <p className="text-[10px] text-indigo-500 uppercase">專案獎金 (+)</p>
-                    <input type="number" className="w-full bg-white border border-indigo-200 rounded-lg p-2 font-black outline-none text-indigo-700" value={editingSalaryAdj.proj} onChange={e => setEditingSalaryAdj({...editingSalaryAdj, proj: e.target.value})} />
-                  </div>
-                  <div className="space-y-1 bg-indigo-50 p-3 rounded-xl border border-indigo-100">
-                    <p className="text-[10px] text-indigo-500 uppercase">主管加給 (+)</p>
-                    <input type="number" className="w-full bg-white border border-indigo-200 rounded-lg p-2 font-black outline-none text-indigo-700" value={editingSalaryAdj.mgr} onChange={e => setEditingSalaryAdj({...editingSalaryAdj, mgr: e.target.value})} />
-                  </div>
-                  <div className="space-y-1 bg-indigo-50 p-3 rounded-xl border border-indigo-100">
-                    <p className="text-[10px] text-indigo-500 uppercase">其他津貼 (+)</p>
-                    <input type="number" className="w-full bg-white border border-indigo-200 rounded-lg p-2 font-black outline-none text-indigo-700" value={editingSalaryAdj.other} onChange={e => setEditingSalaryAdj({...editingSalaryAdj, other: e.target.value})} />
-                  </div>
-                </div>
-                <div className="grid grid-cols-2 gap-4 border-t border-slate-100 pt-4">
-                  <div className="space-y-1 bg-rose-50 p-3 rounded-xl border border-rose-100">
-                    <p className="text-[10px] text-rose-500 uppercase">健保補充保費 (-)</p>
-                    <input type="number" className="w-full bg-white border border-rose-200 rounded-lg p-2 font-black outline-none text-rose-700" value={editingSalaryAdj.supp} onChange={e => setEditingSalaryAdj({...editingSalaryAdj, supp: e.target.value})} />
-                  </div>
-                  <div className="space-y-1 bg-rose-50 p-3 rounded-xl border border-rose-100">
-                    <p className="text-[10px] text-rose-500 uppercase">其他保費/扣款 (-)</p>
-                    <input type="number" className="w-full bg-white border border-rose-200 rounded-lg p-2 font-black outline-none text-rose-700" value={editingSalaryAdj.ded} onChange={e => setEditingSalaryAdj({...editingSalaryAdj, ded: e.target.value})} />
-                  </div>
-                </div>
-                <button type="submit" className="w-full bg-amber-600 text-white py-4 rounded-2xl font-black text-xl shadow-xl active:scale-95 transition">確認儲存</button>
-              </form>
-            </div>
-          </div>
-        )}
-
-        {editingTask && (
+        {editingLeave && (
           <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[110] flex items-center justify-center p-4 font-black">
             <div className="bg-white rounded-[3.5rem] w-full max-w-xl max-h-[90vh] overflow-y-auto shadow-2xl p-10 relative border border-slate-200 font-sans">
-              <button onClick={() => setEditingTask(null)} className="absolute top-8 right-8 text-slate-300 hover:text-slate-900 transition-all font-black"><X size={32} /></button>
-              <h3 className="text-3xl font-black mb-10 flex items-center gap-4 text-indigo-600 uppercase tracking-widest"><Edit2 size={32} /> 修改交辦事項</h3>
-              <form onSubmit={handleUpdateTask} className="space-y-6">
+              <button onClick={() => setEditingLeave(null)} className="absolute top-8 right-8 text-slate-300 hover:text-slate-900 transition-all font-black"><X size={32} /></button>
+              <h3 className="text-2xl md:text-3xl font-black mb-3 flex items-center gap-3 text-amber-600 uppercase tracking-widest">
+                <CalendarOff size={30} /> 修改假單 / 轉換假別
+              </h3>
+              <p className="text-xs text-slate-400 mb-8">
+                員工：<span className="text-slate-700">{editingLeave.employeeName}</span>（儲存後將即時重算月結薪資扣款、特休與補休額度）
+              </p>
+              <form onSubmit={handleUpdateLeave} className="space-y-5">
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-1">
+                    <label className="text-[10px] text-slate-400 uppercase">請假日期</label>
+                    <input type="date" required className="w-full bg-slate-50 border border-slate-200 rounded-2xl p-3 text-sm font-black outline-none focus:border-amber-400 font-mono" value={editingLeave.date || ''} onChange={e => setEditingLeave({ ...editingLeave, date: e.target.value })} />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[10px] text-slate-400 uppercase">請假時數</label>
+                    <input type="number" required min="0.5" step="0.5" className="w-full bg-slate-50 border border-slate-200 rounded-2xl p-3 text-sm font-black outline-none focus:border-amber-400 text-indigo-600 font-mono" value={editingLeave.hours} onChange={e => setEditingLeave({ ...editingLeave, hours: e.target.value })} />
+                  </div>
+                </div>
+
                 <div className="space-y-1">
-                  <label className="text-[10px] text-slate-400 uppercase">指定接收人 (Assignee)</label>
-                  <select required className="w-full bg-slate-50 border border-slate-200 rounded-2xl p-3 text-sm font-black outline-none focus:border-indigo-400" value={editingTask.assigneeId} onChange={e => setEditingTask({...editingTask, assigneeId: e.target.value})}>
-                    <option value="">-- 請選擇人員 --</option>
-                    {userRole !== 'boss' && <option value="boss">👑 老闆 / 營運主管</option>}
-                    {employees.filter(e => e.id !== (userRole === 'coach' ? loggedInCoachId : '')).map(e => <option key={e.id} value={e.id}>👤 {e.name}</option>)}
+                  <label className="text-[10px] text-slate-400 uppercase">轉換假別</label>
+                  <select required className="w-full bg-amber-50/50 border border-amber-200 rounded-2xl p-3.5 text-sm font-black outline-none focus:border-amber-500 text-slate-800" value={editingLeave.type} onChange={e => setEditingLeave({ ...editingLeave, type: e.target.value })}>
+                    {Object.entries(LEAVE_TYPES).map(([k, v]) => (
+                      <option key={k} value={k}>{v.label}</option>
+                    ))}
+                  </select>
+                  <p className="text-[11px] text-amber-700 bg-amber-50 px-3 py-2 rounded-xl border border-amber-100 mt-2">
+                    扣薪規則：{LEAVE_TYPES[editingLeave.type]?.rate === 0 ? '全薪（不扣薪）' : LEAVE_TYPES[editingLeave.type]?.rate === 0.5 ? '半薪（依時薪扣除 50%）' : '不給薪（依時薪扣除 100%）'}
+                  </p>
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-[10px] text-slate-400 uppercase">簽核狀態</label>
+                  <select required className="w-full bg-slate-50 border border-slate-200 rounded-2xl p-3 text-sm font-black outline-none focus:border-amber-400" value={editingLeave.status || 'approved'} onChange={e => setEditingLeave({ ...editingLeave, status: e.target.value })}>
+                    <option value="approved">已核准 (連動薪資與假勤額度)</option>
+                    <option value="pending">退回審核中 (暫不計入扣薪)</option>
+                    <option value="rejected">已退回 / 作廢 (不計入扣薪)</option>
                   </select>
                 </div>
-                <div className="space-y-1">
-                  <label className="text-[10px] text-slate-400 uppercase">任務標題 / 主旨</label>
-                  <input type="text" required placeholder="例如：確認下月排班、器材報修..." className="w-full bg-slate-50 border border-slate-200 rounded-2xl p-3 text-sm font-black outline-none focus:border-indigo-400" value={editingTask.title} onChange={e => setEditingTask({...editingTask, title: e.target.value})} />
-                </div>
-                <div className="space-y-1">
-                  <label className="text-[10px] text-slate-400 uppercase">詳細說明 (選填)</label>
-                  <textarea placeholder="填寫更多任務細節..." rows={4} className="w-full bg-slate-50 border border-slate-200 rounded-2xl p-3 text-sm font-black outline-none focus:border-indigo-400 resize-none" value={editingTask.description} onChange={e => setEditingTask({...editingTask, description: e.target.value})} />
-                </div>
-                <div className="space-y-1">
-                  <label className="text-[10px] text-slate-400 uppercase">期望完成日 (Due Date)</label>
-                  <input type="date" required className="w-full bg-slate-50 border border-slate-200 rounded-2xl p-3 text-sm font-black outline-none focus:border-indigo-400 font-mono" value={editingTask.dueDate} onChange={e => setEditingTask({...editingTask, dueDate: e.target.value})} />
-                </div>
-                <button type="submit" className="w-full bg-indigo-600 text-white py-4 rounded-3xl font-black shadow-lg hover:bg-indigo-700 transition active:scale-95 flex items-center justify-center gap-2">儲存修改</button>
-              </form>
-            </div>
-          </div>
-        )}
 
-        {editingRecord && (
-          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[110] flex items-center justify-center p-4 font-black">
-            <div className="bg-white rounded-[3.5rem] w-full max-w-xl max-h-[90vh] overflow-y-auto shadow-2xl p-10 relative border border-slate-200 font-sans">
-              <button onClick={() => setEditingRecord(null)} className="absolute top-8 right-8 text-slate-300 hover:text-slate-900 transition-all font-black"><X size={32} /></button>
-              <h3 className="text-3xl font-black mb-10 flex items-center gap-4 text-indigo-600 uppercase tracking-widest"><Timer size={32} /> {editingRecord.isNew ? '補增打卡紀錄' : '修改打卡紀錄'}</h3>
-              <form onSubmit={async (e) => {
-                  e.preventDefault();
-                  const inTime = editingRecord.clockInTime;
-                  const outTime = editingRecord.clockOutTime;
-                  let workMinutes = 0;
-                  if (inTime && outTime) {
-                      const [inH, inM] = inTime.split(':').map(Number);
-                      const [outH, outM] = outTime.split(':').map(Number);
-                      workMinutes = (outH * 60 + outM) - (inH * 60 + inM);
-                      if (workMinutes < 0) workMinutes += 24 * 60;
-                  }
-                  triggerSync(async () => {
-                      if (editingRecord.isNew) {
-                          if (!editingRecord.employeeId) { alert("請選擇員工"); return; }
-                          await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'attendance'), {
-                              employeeId: editingRecord.employeeId,
-                              date: editingRecord.date,
-                              clockInTime: inTime,
-                              clockOutTime: outTime || null,
-                              workMinutes: outTime ? workMinutes : 0,
-                              type: 'normal',
-                              status: 'approved',
-                              createdAt: new Date().toISOString(),
-                              updatedAt: new Date().toISOString()
-                          });
-                      } else {
-                          await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'attendance', editingRecord.id), {
-                              date: editingRecord.date,
-                              clockInTime: inTime,
-                              clockOutTime: outTime || null,
-                              workMinutes: outTime ? workMinutes : 0,
-                              updatedAt: new Date().toISOString()
-                          });
-                      }
-                      setEditingRecord(null);
-                  });
-              }} className="space-y-6">
-                
-                {editingRecord.isNew && (
-                  <div className="space-y-1">
-                    <label className="text-[10px] text-slate-400 uppercase">員工</label>
-                    <select required className="w-full bg-slate-50 border border-slate-200 rounded-2xl p-3 text-sm font-black outline-none focus:border-indigo-400" value={editingRecord.employeeId} onChange={e => setEditingRecord({...editingRecord, employeeId: e.target.value})}>
-                      <option value="">-- 請選擇人員 --</option>
-                      {employees.map(e => <option key={e.id} value={e.id}>{e.name}</option>)}
-                    </select>
-                  </div>
-                )}
-                
                 <div className="space-y-1">
-                  <label className="text-[10px] text-slate-400 uppercase">日期</label>
-                  <input type="date" required className="w-full bg-slate-50 border border-slate-200 rounded-2xl p-3 text-sm font-black outline-none focus:border-indigo-400 font-mono" value={editingRecord.date} onChange={e => setEditingRecord({...editingRecord, date: e.target.value})} />
+                  <label className="text-[10px] text-slate-400 uppercase">事由 / 異動備註</label>
+                  <input type="text" placeholder="可加註變更原因（例如：事假改特休）..." className="w-full bg-slate-50 border border-slate-200 rounded-2xl p-3 text-sm font-black outline-none focus:border-amber-400" value={editingLeave.reason || ''} onChange={e => setEditingLeave({ ...editingLeave, reason: e.target.value })} />
                 </div>
-                
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-1">
-                    <label className="text-[10px] text-slate-400 uppercase">上班時間</label>
-                    <input type="time" required className="w-full bg-slate-50 border border-slate-200 rounded-2xl p-3 text-sm font-black outline-none focus:border-indigo-400 font-mono" value={editingRecord.clockInTime} onChange={e => setEditingRecord({...editingRecord, clockInTime: e.target.value})} />
-                  </div>
-                  <div className="space-y-1">
-                    <label className="text-[10px] text-slate-400 uppercase">下班時間 (未下班留空)</label>
-                    <input type="time" className="w-full bg-slate-50 border border-slate-200 rounded-2xl p-3 text-sm font-black outline-none focus:border-indigo-400 font-mono" value={editingRecord.clockOutTime || ''} onChange={e => setEditingRecord({...editingRecord, clockOutTime: e.target.value})} />
-                  </div>
-                </div>
-                
-                <div className="flex gap-4 pt-4 border-t border-slate-100">
-                  <button type="submit" className="flex-1 bg-indigo-600 text-white py-4 rounded-3xl font-black shadow-lg hover:bg-indigo-700 transition active:scale-95 flex items-center justify-center gap-2">儲存紀錄</button>
-                  {!editingRecord.isNew && (
-                      <button type="button" onClick={() => {
-                          setConfirmModal({
-                              isOpen: true, type: 'danger', title: '刪除打卡紀錄', message: '確定要刪除這筆打卡紀錄嗎？(無法復原)', action: async () => {
-                                  triggerSync(async () => {
-                                      await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'attendance', editingRecord.id));
-                                      setEditingRecord(null);
-                                  });
-                              }
-                          });
-                      }} className="bg-rose-50 text-rose-600 px-6 py-4 rounded-3xl font-black hover:bg-rose-100 transition active:scale-95 border border-rose-200"><Trash2 size={20} /></button>
-                  )}
+
+                <div className="flex gap-3 pt-4 border-t border-slate-100">
+                  <button type="submit" className="flex-1 bg-amber-600 text-white py-4 rounded-3xl font-black text-base shadow-lg hover:bg-amber-700 transition active:scale-95 flex items-center justify-center gap-2">
+                    <Save size={18} /> 儲存變更並重算薪資
+                  </button>
+                  <button type="button" onClick={() => handleDeleteLeave(editingLeave)} className="bg-rose-50 text-rose-600 px-5 py-4 rounded-3xl font-black hover:bg-rose-100 transition active:scale-95 border border-rose-200" title="刪除此筆假單">
+                    <Trash2 size={20} />
+                  </button>
                 </div>
               </form>
             </div>
@@ -4897,6 +5265,7 @@ const App = () => {
                               {row.specialEventType ? row.specialEventType :
                                row.classDuration === 'athlete_buy' ? '運動員儲值' :
                                row.classDuration?.startsWith('athlete_') ? `運動員專案 (${row.classDuration.split('_')[1]})` :
+                               row.classDuration === '2p_120min' ? '2人 120 min 課程' :
                                row.classDuration === 'overtime30min' ? '加時 30 min (歷史)' :
                                row.classDuration === 'overtime60min' ? '加時 60 min (歷史)' :
                                `一般課程 (${row.classDuration})`}
